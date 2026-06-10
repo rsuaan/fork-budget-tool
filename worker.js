@@ -106,7 +106,7 @@ export default {
           SELECT Body FROM otel_twlo.otel_logs
           WHERE Timestamp >= now() - INTERVAL 30 DAY
             AND ServiceName = 'voice-amd-service'
-            AND Body LIKE '%X-Twilio-CallSid: ${sid}%'
+            AND LogAttributes['call_sid'] = '${sid}'
           LIMIT 1`),
       ]);
 
