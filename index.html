@@ -369,9 +369,10 @@
 
     // Check bridge is up
     try {
-      await fetch(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`, { method: 'GET', signal: AbortSignal.timeout(2000) });
+      const ping = await fetch(`${BRIDGE}/ping`, { signal: AbortSignal.timeout(2000) });
+      if (!ping.ok) throw new Error('bad ping');
     } catch {
-      statusEl.innerHTML = '<span style="color:#ef4444">Bridge not running. Start it: <code>npm run bridge</code> in the fork-budget-tool folder, or check that the launchd daemon is loaded.</span>';
+      statusEl.innerHTML = '<span style="color:#ef4444">Bridge not reachable — the background daemon may have crashed. Check <code>/tmp/fork-budget-bridge.err</code> or restart with <code>launchctl kickstart gui/$UID/com.rsuaan.fork-budget-bridge</code>.</span>';
       document.getElementById('analyseBtn').disabled = false;
       document.getElementById('stopBtn').style.display = 'none';
       return;

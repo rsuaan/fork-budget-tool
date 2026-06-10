@@ -19,6 +19,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (url.pathname === '/ping') {
+    res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   if (req.method !== 'GET' || url.pathname !== '/analyse') {
     res.writeHead(404, CORS);
     res.end(JSON.stringify({ error: 'Not found' }));
