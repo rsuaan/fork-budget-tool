@@ -84,7 +84,10 @@
     <div id="progressWrap" style="display:none;margin-top:0.85rem">
       <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6b7280;margin-bottom:0.3rem">
         <span id="progressLabel">Querying…</span>
-        <span id="progressCount">0 / 5</span>
+        <span style="display:flex;gap:0.75rem">
+          <span id="progressCount">0 / 5</span>
+          <span id="progressElapsed" style="color:#9ca3af">0s</span>
+        </span>
       </div>
       <div style="height:6px;background:#e0e7ff;border-radius:999px;overflow:hidden">
         <div id="progressBar" style="height:100%;background:#6366f1;border-radius:999px;width:0%;transition:width 0.4s"></div>
@@ -371,9 +374,8 @@
   function stopAnalysis() {
     if (_es) { _es.close(); _es = null; }
     setAnalysing(false);
-    document.getElementById('progressWrap').style.display = 'none';
+    document.getElementById('progressLabel').textContent = 'Stopped';
     document.getElementById('authBanner').style.display = 'none';
-    document.getElementById('featureRows').style.display = 'none';
   }
 
   function applyResults(params) {
@@ -439,16 +441,31 @@
     document.getElementById('progressBar').style.width = '0%';
     document.getElementById('progressBar').style.background = '#6366f1';
     document.getElementById('progressCount').textContent = '0 / 5';
-    document.getElementById('progressLabel').textContent = 'Querying…';
+    document.getElementById('progressLabel').textContent = 'Connecting…';
+    document.getElementById('progressElapsed').textContent = '0s';
     document.getElementById('authBanner').style.display = 'none';
     renderFeatureRows(rows);
+
+    const startTime = Date.now();
+    const elapsedTimer = setInterval(() => {
+      const s = Math.floor((Date.now() - startTime) / 1000);
+      document.getElementById('progressElapsed').textContent = s + 's';
+    }, 1000);
+
+    const finish = () => {
+      clearInterval(elapsedTimer);
+      setAnalysing(false);
+    };
 
     _es = new EventSource(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`);
 
     _es.onmessage = e => {
       const msg = JSON.parse(e.data);
 
-      if (msg.type === 'auth') {
+      if (msg.type === 'connected') {
+        document.getElementById('progressLabel').textContent = 'Querying…';
+      }
+      else if (msg.type === 'auth') {
         document.getElementById('authBanner').style.display = 'block';
         document.getElementById('authMsg').textContent = msg.message;
       }
@@ -465,12 +482,12 @@
       }
       else if (msg.type === 'done') {
         _es.close(); _es = null;
-        setAnalysing(false);
+        finish();
       }
       else if (msg.type === 'error') {
         document.getElementById('featureRows').innerHTML += `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">${msg.message}</div>`;
         _es.close(); _es = null;
-        setAnalysing(false);
+        finish();
       }
     };
 
@@ -478,7 +495,7 @@
       if (_es) {
         document.getElementById('featureRows').innerHTML += '<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">Connection lost.</div>';
         _es.close(); _es = null;
-        setAnalysing(false);
+        finish();
       }
     };
   }
