@@ -358,6 +358,8 @@
 
   const BRIDGE = 'http://127.0.0.1:47821';
   let _es = null;
+  let elapsedTimer = null;
+  let watchdog = null;
 
   const FEATURES = [
     { key: 'media',         label: 'Media Streams' },
@@ -384,8 +386,20 @@
   function stopAnalysis() {
     const sid = document.getElementById('callSid').value.trim();
     if (_es) { _es.close(); _es = null; }
-    // Tell bridge to kill the Claude process (safe even if already done)
     if (sid) fetch(`${BRIDGE}/stop?call_sid=${encodeURIComponent(sid)}`).catch(() => {});
+    // Kill timers
+    clearInterval(elapsedTimer); elapsedTimer = null;
+    clearTimeout(watchdog); watchdog = null;
+    // Flip any still-spinning rows to stopped
+    document.querySelectorAll('#featureRows > div').forEach(row => {
+      const iconEl = row.querySelector('span:first-child');
+      if (iconEl && iconEl.innerHTML.includes('⟳')) {
+        iconEl.innerHTML = '–';
+        iconEl.style.color = '#9ca3af';
+        const detailEl = row.querySelector('span:last-child');
+        if (detailEl) { detailEl.textContent = 'Stopped'; detailEl.style.color = '#9ca3af'; }
+      }
+    });
     setAnalysing(false);
     document.getElementById('progressLabel').textContent = 'Stopped';
     document.getElementById('authBanner').style.display = 'none';
@@ -469,11 +483,10 @@
       return h + 'h ' + rm + 'm';
     }
 
-    const elapsedTimer = setInterval(() => {
+    elapsedTimer = setInterval(() => {
       document.getElementById('progressElapsed').textContent = fmtElapsed(Date.now() - startTime);
     }, 1000);
 
-    let watchdog = null;
     let authInProgress = false;
     // Watchdog only fires if no heartbeat/progress for 60s (Grafana queries can take 30-90s).
     // Bridge sends a heartbeat every 8s while Claude is alive, so this only triggers on a true stall.
@@ -501,8 +514,8 @@
     }
 
     const finish = (showPcapBtn) => {
-      clearInterval(elapsedTimer);
-      clearTimeout(watchdog);
+      clearInterval(elapsedTimer); elapsedTimer = null;
+      clearTimeout(watchdog); watchdog = null;
       setAnalysing(false);
       if (showPcapBtn) {
         document.getElementById('pcapBtnWrap').style.display = 'block';
