@@ -306,23 +306,6 @@
 </div>
 
 <!-- Media Analysis -->
-<div class="card" id="mediaAnalysisCard" style="display:none">
-  <h2>4. Deep Media Analysis</h2>
-  <p class="note" style="margin-bottom:1rem">
-    Run <code>/fork-budget</code> in Claude Code — it queries Grafana <strong>and</strong> runs the
-    <code>voice-media-troubleshooting</code> pcap pipeline (RTP, SIP, codec, SRTP) in one shot,
-    then generates a pre-filled link back to this tool.
-  </p>
-  <div class="tip">
-    <strong>What Claude does:</strong>
-    <ul style="margin:0.5rem 0 0 1.25rem;line-height:1.9">
-      <li>Queries Grafana OTEL logs for Media Streams, SIPREC, Transcription, AMD in parallel</li>
-      <li>Downloads TMS edge pcap via <code>owl</code> and extracts SIP sessions + RTP streams</li>
-      <li>Calculates total fork budget and highlights over-limit resources</li>
-      <li>Returns a pre-filled URL to this page with results already loaded</li>
-    </ul>
-  </div>
-</div>
 
 <button class="btn-secondary" onclick="clearAll()">Clear / Reset</button>
 
@@ -390,7 +373,6 @@
     const sids = parseSids(raw);
     const first = sids[0] || '';
     document.getElementById('refSidLine').textContent = sids.length ? 'Call SID: ' + sids.join(' · ') : '';
-    document.getElementById('mediaAnalysisCard').style.display = first ? 'block' : 'none';
     // Clear previous results when SID changes
     document.getElementById('progressWrap').style.display = 'none';
     document.getElementById('featureRows').style.display = 'none';
@@ -878,7 +860,6 @@
   function clearAll() {
     document.getElementById('callSid').value = '';
     document.getElementById('refSidLine').textContent = '';
-    document.getElementById('mediaAnalysisCard').style.display = 'none';
     document.getElementById('claudeCmd').textContent = '/fork-budget';
     ['mediaStreams','siprec','transcription','amd'].forEach(id => document.getElementById(id).value = '0');
     document.getElementById('mediaCustomVal').value = '';
