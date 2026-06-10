@@ -470,7 +470,7 @@ ${SKILL_DIR}/check-sip-and-rtp.sh ${sid}-voice-tms-edge-carrier-tnx.pcap`;
       const st = states[s.key];
       let icon, color, detail;
       if (st === 'pending')  { icon = '·'; color = '#d1d5db'; detail = 'Waiting…'; }
-      else if (st === 'running') { icon = '⟳'; color = '#6366f1'; detail = `Querying ${s.service}…`; }
+      else if (st === 'running') { icon = '⟳'; color = '#6366f1'; detail = `Querying ${s.service}… <span id="elapsed_${s.key}"></span>`; }
       else if (st === 'stopped') { icon = '✕'; color = '#f59e0b'; detail = 'Stopped'; }
       else if (st.error)     { icon = '✕'; color = '#ef4444'; detail = st.error; }
       else                   { icon = '✓'; color = '#10b981'; detail = st.result; }
@@ -538,8 +538,15 @@ ${SKILL_DIR}/check-sip-and-rtp.sh ${sid}-voice-tms-edge-carrier-tnx.pcap`;
       states[svc.key] = 'running';
       refresh();
 
+      const startTime = Date.now();
+      const elapsedTimer = setInterval(() => {
+        const el = document.getElementById('elapsed_' + svc.key);
+        if (el) el.textContent = '(' + Math.floor((Date.now() - startTime) / 1000) + 's)';
+      }, 1000);
+
       try {
         const rows = await queryService(sid, svc.key, session, _abortController.signal);
+        clearInterval(elapsedTimer);
         results[svc.key] = rows;
 
         let resultText = 'Not detected';
@@ -561,6 +568,7 @@ ${SKILL_DIR}/check-sip-and-rtp.sh ${sid}-voice-tms-edge-carrier-tnx.pcap`;
 
         states[svc.key] = { result: resultText };
       } catch (err) {
+        clearInterval(elapsedTimer);
         if (err.name === 'AbortError' || _stopRequested) {
           states[svc.key] = 'stopped';
           for (const remaining of SERVICES.filter(s => states[s.key] === 'pending')) {

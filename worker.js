@@ -23,6 +23,7 @@ async function gq(auth, sql) {
     {
       method: 'POST',
       headers,
+      signal: AbortSignal.timeout(20000),
       body: JSON.stringify({
         queries: [{
           datasource: { uid: DS_UID, type: 'grafana-clickhouse-datasource' },
@@ -36,6 +37,7 @@ async function gq(auth, sql) {
     }
   );
   if (!resp.ok) throw new Error(`Grafana ${resp.status}: ${await resp.text()}`);
+
   const json = await resp.json();
   const frames = json?.results?.A?.frames;
   if (!frames?.length) return [];
