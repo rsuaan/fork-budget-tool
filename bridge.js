@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, exec } from 'child_process';
 import http from 'http';
 
 const PORT = 47821;
@@ -9,6 +9,33 @@ const CORS = {
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
+
+function send(res, obj) {
+  res.write(`data: ${JSON.stringify(obj)}\n\n`);
+}
+
+// Parse [PROGRESS:key:state:detail] and [RESULT:...] markers from a text chunk
+function parseMarkers(text) {
+  const events = [];
+  for (const line of text.split('\n')) {
+    const progress = line.match(/\[PROGRESS:(\w+):(querying|done|error):?(.*?)\]$/);
+    if (progress) {
+      events.push({ type: 'progress', key: progress[1], state: progress[2], detail: progress[3] || '' });
+      continue;
+    }
+    const result = line.match(/\[RESULT:([^\]]+)\]/);
+    if (result) {
+      events.push({ type: 'result', params: result[1] });
+    }
+  }
+  return events;
+}
+
+// Detect OAuth URL in Claude output
+function extractOAuthUrl(text) {
+  const m = text.match(/https:\/\/claude-mcp-grafana[^\s)>"]+/);
+  return m ? m[0] : null;
+}
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -52,19 +79,42 @@ const server = http.createServer((req, res) => {
     env: { ...process.env, HOME: '/Users/rsuaan' },
   });
 
-  child.stdout.on('data', chunk => {
-    const lines = chunk.toString().split('\n');
-    for (const line of lines) {
-      res.write(`data: ${JSON.stringify({ text: line + '\n' })}\n\n`);
-    }
-  });
+  let oauthOpened = false;
+  let buffer = '';
 
-  child.stderr.on('data', chunk => {
-    res.write(`data: ${JSON.stringify({ error: chunk.toString() })}\n\n`);
-  });
+  function processChunk(chunk) {
+    buffer += chunk;
+
+    // Check for OAuth URL and open browser automatically
+    if (!oauthOpened) {
+      const oauthUrl = extractOAuthUrl(buffer);
+      if (oauthUrl) {
+        oauthOpened = true;
+        send(res, { type: 'auth', message: 'Grafana authentication required — opening browser…' });
+        exec(`open "${oauthUrl}"`, err => {
+          if (err) {
+            send(res, { type: 'auth_error', message: 'Could not open browser. Visit: ' + oauthUrl });
+          }
+        });
+        send(res, { type: 'auth_waiting', message: 'Waiting for authentication…' });
+      }
+    }
+
+    // Parse and emit structured progress markers
+    const markers = parseMarkers(buffer);
+    for (const ev of markers) {
+      send(res, ev);
+    }
+    // Clear processed lines from buffer, keep last incomplete line
+    const lastNewline = buffer.lastIndexOf('\n');
+    if (lastNewline !== -1) buffer = buffer.slice(lastNewline + 1);
+  }
+
+  child.stdout.on('data', chunk => processChunk(chunk.toString()));
+  child.stderr.on('data', chunk => processChunk(chunk.toString()));
 
   child.on('close', code => {
-    res.write(`data: ${JSON.stringify({ done: true, code })}\n\n`);
+    send(res, { type: 'done', code });
     res.end();
   });
 

@@ -50,6 +50,7 @@
     .coverage-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
     .coverage-table tr:last-child td { border-bottom: none; }
     .ref-sid { font-size: 0.78rem; color: #9ca3af; margin-top: 0.5rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -326,6 +327,13 @@
   const BRIDGE = 'http://127.0.0.1:47821';
   let _es = null;
 
+  const FEATURE_LABELS = {
+    media:          'Media Streams',
+    transcription:  'Real-Time Transcription',
+    siprec:         'SIPREC',
+    amd:            'AMD',
+  };
+
   function updateSid() {
     const sid = document.getElementById('callSid').value.trim();
     document.getElementById('refSidLine').textContent = sid ? 'Call SID: ' + sid : '';
@@ -339,19 +347,44 @@
     document.getElementById('stopBtn').style.display = 'none';
   }
 
-  function applyResults(text) {
-    // Parse URL params Claude embeds in the pre-filled link and apply them
-    const match = text.match(/\?sid=[^\s)>"]+/);
-    if (!match) return;
-    const p = new URLSearchParams(match[0].slice(1));
-    if (p.get('sid')) document.getElementById('callSid').value = p.get('sid');
+  function applyResults(params) {
+    const p = new URLSearchParams(params);
     if (p.has('media'))         document.getElementById('mediaStreams').value  = p.get('media');
     if (p.has('siprec'))        document.getElementById('siprec').value        = p.get('siprec');
     if (p.has('transcription')) document.getElementById('transcription').value = p.get('transcription');
     if (p.has('amd'))           document.getElementById('amd').value           = p.get('amd');
     recalc();
     updateDisplays();
-    updateSid();
+  }
+
+  function renderStatus(rows, authMsg) {
+    const statusEl = document.getElementById('analyseStatus');
+    let html = '';
+
+    if (authMsg) {
+      html += `<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;padding:0.6rem 0.8rem;background:#fef9c3;border:1px solid #fde047;border-radius:7px;font-size:0.82rem;color:#713f12">
+        <span style="font-size:1rem">🔐</span> ${authMsg}
+      </div>`;
+    }
+
+    html += '<div style="display:flex;flex-direction:column;gap:0.35rem">';
+    for (const [key, label] of Object.entries(FEATURE_LABELS)) {
+      const row = rows[key] || { state: 'pending' };
+      let icon, color, detail;
+      if (row.state === 'pending')   { icon = '·';  color = '#9ca3af'; detail = ''; }
+      else if (row.state === 'querying') { icon = '<span style="display:inline-block;animation:spin 1s linear infinite">⟳</span>'; color = '#6366f1'; detail = 'Querying…'; }
+      else if (row.state === 'done') { icon = '✓';  color = '#10b981'; detail = row.detail || 'Detected'; }
+      else if (row.state === 'none') { icon = '–';  color = '#9ca3af'; detail = 'Not found'; }
+      else                           { icon = '✕';  color = '#ef4444'; detail = row.detail || 'Error'; }
+
+      html += `<div style="display:flex;align-items:center;gap:0.6rem;padding:0.45rem 0.6rem;background:#f9fafb;border-radius:6px">
+        <span style="color:${color};font-weight:700;width:1rem;text-align:center;font-size:0.9rem">${icon}</span>
+        <span style="font-size:0.85rem;font-weight:500;flex:1">${label}</span>
+        <span style="font-size:0.78rem;color:${color}">${detail}</span>
+      </div>`;
+    }
+    html += '</div>';
+    statusEl.innerHTML = html;
   }
 
   async function analyseCall() {
@@ -365,45 +398,67 @@
 
     document.getElementById('analyseBtn').disabled = true;
     document.getElementById('stopBtn').style.display = 'inline-block';
-    statusEl.innerHTML = '<span style="color:#6366f1">Connecting to Claude…</span>';
+    statusEl.innerHTML = '<span style="color:#6366f1;font-size:0.82rem">Connecting…</span>';
 
     // Check bridge is up
     try {
       const ping = await fetch(`${BRIDGE}/ping`, { signal: AbortSignal.timeout(2000) });
-      if (!ping.ok) throw new Error('bad ping');
+      if (!ping.ok) throw new Error();
     } catch {
-      statusEl.innerHTML = '<span style="color:#ef4444">Bridge not reachable — the background daemon may have crashed. Check <code>/tmp/fork-budget-bridge.err</code> or restart with <code>launchctl kickstart gui/$UID/com.rsuaan.fork-budget-bridge</code>.</span>';
+      statusEl.innerHTML = '<span style="color:#ef4444;font-size:0.82rem">Bridge not reachable — daemon may have crashed. Check <code>/tmp/fork-budget-bridge.err</code>.</span>';
       document.getElementById('analyseBtn').disabled = false;
       document.getElementById('stopBtn').style.display = 'none';
       return;
     }
 
-    let output = '';
-    statusEl.innerHTML = '<pre style="background:#1e1e2e;color:#cdd6f4;padding:0.75rem;border-radius:7px;font-size:0.78rem;line-height:1.6;overflow-x:auto;white-space:pre-wrap;max-height:400px;overflow-y:auto"></pre>';
-    const pre = statusEl.querySelector('pre');
+    const rows = {};
+    let authMsg = null;
+
+    // Show all features as pending immediately
+    renderStatus(rows, null);
 
     _es = new EventSource(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`);
 
     _es.onmessage = e => {
       const msg = JSON.parse(e.data);
-      if (msg.text) {
-        output += msg.text;
-        pre.textContent = output;
-        pre.scrollTop = pre.scrollHeight;
+
+      if (msg.type === 'auth') {
+        authMsg = msg.message;
+        renderStatus(rows, authMsg);
       }
-      if (msg.done) {
+      else if (msg.type === 'auth_waiting') {
+        authMsg = msg.message;
+        renderStatus(rows, authMsg);
+      }
+      else if (msg.type === 'auth_error') {
+        authMsg = `<span style="color:#ef4444">${msg.message}</span>`;
+        renderStatus(rows, authMsg);
+      }
+      else if (msg.type === 'progress') {
+        if (msg.state === 'querying') {
+          rows[msg.key] = { state: 'querying' };
+        } else if (msg.state === 'done') {
+          rows[msg.key] = { state: msg.detail ? 'done' : 'none', detail: msg.detail };
+        } else if (msg.state === 'error') {
+          rows[msg.key] = { state: 'error', detail: msg.detail };
+        }
+        // Clear auth message once queries start succeeding
+        if (msg.state === 'done' && authMsg) authMsg = null;
+        renderStatus(rows, authMsg);
+      }
+      else if (msg.type === 'result') {
+        applyResults(msg.params);
+      }
+      else if (msg.type === 'done') {
         _es.close(); _es = null;
         document.getElementById('analyseBtn').disabled = false;
         document.getElementById('stopBtn').style.display = 'none';
-        applyResults(output);
-      }
-      if (msg.error) {
-        pre.textContent += '\n[stderr] ' + msg.error;
+        renderStatus(rows, null);
       }
     };
 
     _es.onerror = () => {
-      statusEl.innerHTML += '<br><span style="color:#ef4444">Connection to bridge lost.</span>';
+      statusEl.innerHTML += '<div style="color:#ef4444;font-size:0.82rem;margin-top:0.5rem">Connection to bridge lost.</div>';
       document.getElementById('analyseBtn').disabled = false;
       document.getElementById('stopBtn').style.display = 'none';
       _es = null;
