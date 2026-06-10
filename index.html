@@ -64,13 +64,44 @@
   <input type="text" id="callSid" placeholder="CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" oninput="updateSid()" />
 
   <div style="margin-top:1rem;padding:1rem;background:#f8f7ff;border:1px solid #e0e7ff;border-radius:8px">
-    <div style="font-size:0.85rem;font-weight:600;color:#4338ca;margin-bottom:0.4rem">⚡ Analyse This Call</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem">
+      <div style="font-size:0.85rem;font-weight:600;color:#4338ca">⚡ Analyse This Call</div>
+      <button onclick="toggleAuth()" id="authToggleBtn"
+        style="background:none;border:1px solid #c7d2fe;border-radius:5px;padding:0.2rem 0.6rem;font-size:0.75rem;color:#6366f1;cursor:pointer">
+        ⚙ Grafana Auth
+      </button>
+    </div>
+
+    <!-- Grafana Auth Panel -->
+    <div id="authPanel" style="display:none;background:#fff;border:1px solid #e0e7ff;border-radius:7px;padding:0.85rem;margin-bottom:0.85rem">
+      <div style="font-size:0.8rem;font-weight:600;color:#374151;margin-bottom:0.3rem">Grafana Session Cookie</div>
+      <div style="font-size:0.75rem;color:#6b7280;margin-bottom:0.6rem;line-height:1.6">
+        1. Open <a href="https://grafana.twilioinfra.com" target="_blank" style="color:#6366f1">grafana.twilioinfra.com</a> and log in<br>
+        2. Open DevTools (F12) → <strong>Storage</strong> → <strong>Cookies</strong> → copy the value of <code>grafana_session</code><br>
+        3. Paste it below and click Save — stored locally in your browser only
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:center">
+        <input type="password" id="grafanaSessionInput" placeholder="Paste grafana_session value here"
+          style="flex:1;padding:0.45rem 0.65rem;border:1px solid #d1d5db;border-radius:5px;font-size:0.82rem;font-family:monospace" />
+        <button onclick="saveSession()"
+          style="background:#6366f1;color:#fff;border:none;padding:0.45rem 0.9rem;border-radius:5px;font-size:0.82rem;font-weight:600;cursor:pointer;white-space:nowrap">
+          Save
+        </button>
+        <button onclick="clearSession()"
+          style="background:#f3f4f6;color:#6b7280;border:none;padding:0.45rem 0.7rem;border-radius:5px;font-size:0.82rem;cursor:pointer;white-space:nowrap">
+          Clear
+        </button>
+      </div>
+      <div id="authSavedMsg" style="margin-top:0.5rem;font-size:0.78rem;display:none"></div>
+    </div>
+
     <div style="font-size:0.78rem;color:#6b7280;margin-bottom:0.75rem;line-height:1.5">
       Click Analyse to automatically detect which features were active on this call and calculate the fork budget.
+      <span id="sessionIndicator"></span>
     </div>
     <button onclick="analyzeCall()" id="analyzeBtn"
       style="background:#6366f1;color:#fff;border:none;padding:0.5rem 1.1rem;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer">
-      Analyze
+      Analyse
     </button>
     <div id="analyzeStatus" style="margin-top:0.75rem;font-size:0.82rem;display:none"></div>
   </div>
@@ -236,6 +267,39 @@
 
   const WORKER_URL = 'https://fork-budget.mond-suaan.workers.dev';
 
+  function toggleAuth() {
+    const panel = document.getElementById('authPanel');
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    const saved = localStorage.getItem('grafana_session');
+    if (saved) document.getElementById('grafanaSessionInput').value = saved;
+  }
+
+  function saveSession() {
+    const val = document.getElementById('grafanaSessionInput').value.trim();
+    const msg = document.getElementById('authSavedMsg');
+    if (!val) { msg.style.display = 'block'; msg.innerHTML = '<span style="color:#ef4444">Please paste the session cookie value.</span>'; return; }
+    localStorage.setItem('grafana_session', val);
+    msg.style.display = 'block';
+    msg.innerHTML = '<span style="color:#10b981;font-weight:600">✓ Saved. You can close this panel.</span>';
+    updateSessionIndicator();
+  }
+
+  function clearSession() {
+    localStorage.removeItem('grafana_session');
+    document.getElementById('grafanaSessionInput').value = '';
+    const msg = document.getElementById('authSavedMsg');
+    msg.style.display = 'block';
+    msg.innerHTML = '<span style="color:#6b7280">Session cleared.</span>';
+    updateSessionIndicator();
+  }
+
+  function updateSessionIndicator() {
+    const el = document.getElementById('sessionIndicator');
+    el.innerHTML = localStorage.getItem('grafana_session')
+      ? ' <span style="color:#10b981;font-weight:600">✓ Session saved</span>'
+      : ' <span style="color:#f59e0b;font-weight:600">⚠ No session — click ⚙ Grafana Auth to add one</span>';
+  }
+
   async function analyzeCall() {
     const sid = document.getElementById('callSid').value.trim();
     const statusEl = document.getElementById('analyzeStatus');
@@ -250,8 +314,19 @@
     statusEl.style.display = 'block';
     statusEl.innerHTML = '<span style="color:#6b7280">Checking active features on this call…</span>';
 
+    const session = localStorage.getItem('grafana_session');
+    if (!session) {
+      statusEl.style.display = 'block';
+      statusEl.innerHTML = '<span style="color:#f59e0b;font-weight:600">⚠ No Grafana session saved. Click ⚙ Grafana Auth above to add one.</span>';
+      btn.disabled = false;
+      btn.textContent = 'Analyse';
+      return;
+    }
+
     try {
-      const resp = await fetch(`${WORKER_URL}?call_sid=${encodeURIComponent(sid)}`);
+      const resp = await fetch(`${WORKER_URL}?call_sid=${encodeURIComponent(sid)}`, {
+        headers: { 'X-Grafana-Session': session }
+      });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
         throw new Error(err.error || `HTTP ${resp.status}`);
@@ -388,6 +463,7 @@
   }
 
   recalc();
+  updateSessionIndicator();
 </script>
 </body>
 </html>

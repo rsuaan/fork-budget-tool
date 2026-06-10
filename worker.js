@@ -11,15 +11,18 @@ function isValidSid(sid) {
   return typeof sid === 'string' && /^CA[0-9a-f]{32}$/.test(sid);
 }
 
-async function gq(token, sql) {
+async function gq(auth, sql) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (auth.startsWith('glsa_') || auth.startsWith('eyJ')) {
+    headers['Authorization'] = `Bearer ${auth}`;
+  } else {
+    headers['Cookie'] = `grafana_session=${auth}`;
+  }
   const resp = await fetch(
     `${GRAFANA_URL}/api/ds/query?ds_type=grafana-clickhouse-datasource`,
     {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
+      headers,
       body: JSON.stringify({
         queries: [{
           datasource: { uid: DS_UID, type: 'grafana-clickhouse-datasource' },
@@ -60,16 +63,17 @@ export default {
       });
     }
 
-    if (!env.GRAFANA_TOKEN) {
-      return new Response(JSON.stringify({ error: 'GRAFANA_TOKEN not configured' }), {
-        status: 500,
+    const auth = request.headers.get('X-Grafana-Session') || env.GRAFANA_TOKEN || '';
+    if (!auth) {
+      return new Response(JSON.stringify({ error: 'No Grafana session provided' }), {
+        status: 401,
         headers: { ...CORS, 'Content-Type': 'application/json' },
       });
     }
 
     try {
       const [mediaRows, transcRows, siprecRows, amdRows] = await Promise.all([
-        gq(env.GRAFANA_TOKEN, `
+        gq(auth, `
           SELECT LogAttributes['session_id'] AS stream_sid, min(Timestamp) AS started
           FROM otel_twlo.otel_logs
           WHERE Timestamp >= now() - INTERVAL 30 DAY
@@ -78,7 +82,7 @@ export default {
             AND LogAttributes['session_id'] != ''
           GROUP BY stream_sid ORDER BY started`),
 
-        gq(env.GRAFANA_TOKEN, `
+        gq(auth, `
           SELECT LogAttributes['stream_id'] AS stream_sid,
                  extractAll(Body, 'channel=(inbound|outbound)') AS channels
           FROM otel_twlo.otel_logs
@@ -89,7 +93,7 @@ export default {
             AND Body LIKE '%State change%ESTABLISHED%'
           GROUP BY stream_sid, channels LIMIT 20`),
 
-        gq(env.GRAFANA_TOKEN, `
+        gq(auth, `
           SELECT LogAttributes['stream_id'] AS stream_sid, count() AS events
           FROM otel_twlo.otel_logs
           WHERE Timestamp >= now() - INTERVAL 30 DAY
@@ -98,7 +102,7 @@ export default {
             AND LogAttributes['stream_id'] != ''
           GROUP BY stream_sid ORDER BY events DESC LIMIT 10`),
 
-        gq(env.GRAFANA_TOKEN, `
+        gq(auth, `
           SELECT Body FROM otel_twlo.otel_logs
           WHERE Timestamp >= now() - INTERVAL 30 DAY
             AND ServiceName = 'voice-amd-service'
