@@ -381,6 +381,8 @@
     document.getElementById('pcapOutput').style.display = 'none';
     document.getElementById('pcapOutput').textContent = '';
     document.getElementById('pcapStatus').innerHTML = '';
+    const pcapBtn = document.getElementById('pcapBtn');
+    pcapBtn.disabled = false; pcapBtn.style.opacity = '1'; pcapBtn.style.cursor = 'pointer'; pcapBtn.textContent = 'Run Media Path Analysis';
     document.getElementById('authBanner').style.display = 'none';
     ['mediaStreams','siprec','transcription','amd'].forEach(id => document.getElementById(id).value = '0');
     recalc();
