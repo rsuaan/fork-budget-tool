@@ -93,6 +93,18 @@
         </button>
       </div>
       <div id="authSavedMsg" style="margin-top:0.5rem;font-size:0.78rem;display:none"></div>
+      <hr style="margin:0.85rem 0;border-color:#e0e7ff"/>
+      <div style="font-size:0.8rem;font-weight:600;color:#374151;margin-bottom:0.3rem">One-click refresh via bookmarklet</div>
+      <div style="font-size:0.75rem;color:#6b7280;margin-bottom:0.6rem;line-height:1.6">
+        Drag the button below to your bookmark bar. Next time your session expires, click it while on
+        <a href="https://grafana.twilioinfra.com" target="_blank" style="color:#6366f1">grafana.twilioinfra.com</a>
+        — it will open this tool with your fresh token already saved.
+      </div>
+      <a id="bookmarkletLink" href="" onclick="return false;"
+        style="display:inline-block;background:#4f46e5;color:#fff;padding:0.4rem 0.9rem;border-radius:6px;font-size:0.82rem;font-weight:600;text-decoration:none;cursor:grab;user-select:none">
+        🔑 Save Grafana Session → Fork Budget
+      </a>
+      <div style="font-size:0.72rem;color:#9ca3af;margin-top:0.4rem">Drag this to your bookmarks bar — do not click it here.</div>
     </div>
 
     <div style="font-size:0.78rem;color:#6b7280;margin-bottom:0.75rem;line-height:1.5">
@@ -110,6 +122,8 @@
     </div>
     <div id="analyzeStatus" style="margin-top:0.75rem;font-size:0.82rem;display:none"></div>
   </div>
+
+  <div id="mediaAnalysisRow" style="display:none"></div>
 </div>
 
 <!-- Features -->
@@ -299,6 +313,30 @@
   </div>
 </div>
 
+<!-- Media Analysis -->
+<div class="card" id="mediaAnalysisCard" style="display:none">
+  <h2>4. Deep Media Analysis</h2>
+  <p class="note" style="margin-bottom:1rem">Run the local pcap pipeline via <code>voice-media-troubleshooting</code> to analyse RTP, SIP, codec and SRTP issues for this call. Requires <code>owl</code>, <code>tshark</code>, and <code>jq</code>.</p>
+
+  <div style="margin-bottom:1rem">
+    <div style="font-size:0.8rem;font-weight:600;color:#374151;margin-bottom:0.4rem">1. Create a working directory and run the full pipeline</div>
+    <pre id="mediaCmd1" style="background:#1e1e2e;color:#cdd6f4;padding:0.85rem 1rem;border-radius:7px;font-size:0.8rem;overflow-x:auto;line-height:1.7;margin:0"></pre>
+    <button onclick="copyCmd('mediaCmd1')" style="margin-top:0.4rem;background:#f3f4f6;color:#374151;border:none;padding:0.3rem 0.75rem;border-radius:5px;font-size:0.75rem;cursor:pointer">Copy</button>
+    <span id="copyMsg1" style="font-size:0.75rem;color:#10b981;margin-left:0.5rem;display:none">Copied!</span>
+  </div>
+
+  <div style="margin-bottom:1rem">
+    <div style="font-size:0.8rem;font-weight:600;color:#374151;margin-bottom:0.4rem">2. Or run individual steps</div>
+    <pre id="mediaCmd2" style="background:#1e1e2e;color:#cdd6f4;padding:0.85rem 1rem;border-radius:7px;font-size:0.8rem;overflow-x:auto;line-height:1.7;margin:0"></pre>
+    <button onclick="copyCmd('mediaCmd2')" style="margin-top:0.4rem;background:#f3f4f6;color:#374151;border:none;padding:0.3rem 0.75rem;border-radius:5px;font-size:0.75rem;cursor:pointer">Copy</button>
+    <span id="copyMsg2" style="font-size:0.75rem;color:#10b981;margin-left:0.5rem;display:none">Copied!</span>
+  </div>
+
+  <div class="tip">
+    Run these commands in a terminal with the <code>voice-media-troubleshooting</code> plugin scripts on your PATH, or use Claude Code with the plugin loaded and type <code>/media-analysis</code> to have Claude drive the pipeline for you.
+  </div>
+</div>
+
 <button class="btn-secondary" onclick="clearAll()">Clear / Reset</button>
 
 <script>
@@ -332,9 +370,49 @@
     el.style.display = el.style.display === 'none' ? 'block' : 'none';
   }
 
+  const SKILL_DIR = '/Users/rsuaan/voice-media-troubleshooting/skills/media-analysis/scripts';
+
   function updateSid() {
     const sid = document.getElementById('callSid').value.trim();
     document.getElementById('refSidLine').textContent = sid ? 'Call SID: ' + sid : '';
+    const valid = /^CA[0-9a-f]{32}$/.test(sid);
+    document.getElementById('mediaAnalysisRow').style.display = valid ? 'block' : 'none';
+    document.getElementById('mediaAnalysisCard').style.display = valid ? 'block' : 'none';
+    if (valid) updateMediaCmds(sid);
+  }
+
+  function updateMediaCmds(sid) {
+    document.getElementById('mediaCmd1').textContent =
+`mkdir -p /tmp/${sid} && cd /tmp/${sid}
+cat > manifest.json << 'EOF'
+{
+  "name": "${sid}",
+  "calls": [{ "call_sid": "${sid}", "test": "fork budget investigation" }]
+}
+EOF
+make -f ${SKILL_DIR}/Makefile.call-analysis all`;
+
+    document.getElementById('mediaCmd2').textContent =
+`cd /tmp/${sid}
+
+# Resolve callmeta roles
+${SKILL_DIR}/callmeta-roles.sh ${sid}
+
+# Download TMS edge pcap
+${SKILL_DIR}/get-callmeta.sh ${sid} voice-tms-edge-carrier-tnx
+
+# Extract SIP sessions + RTP streams
+${SKILL_DIR}/check-sip-and-rtp.sh ${sid}-voice-tms-edge-carrier-tnx.pcap`;
+  }
+
+  function copyCmd(id) {
+    const text = document.getElementById(id).textContent;
+    const msgId = id === 'mediaCmd1' ? 'copyMsg1' : 'copyMsg2';
+    navigator.clipboard.writeText(text).then(() => {
+      const msg = document.getElementById(msgId);
+      msg.style.display = 'inline';
+      setTimeout(() => { msg.style.display = 'none'; }, 2000);
+    });
   }
 
   const WORKER_URL = 'https://fork-budget.mond-suaan.workers.dev';
@@ -373,9 +451,11 @@
   }
 
   let _stopRequested = false;
+  let _abortController = null;
 
   function stopAnalysis() {
     _stopRequested = true;
+    if (_abortController) _abortController.abort();
   }
 
   const SERVICES = [
@@ -402,9 +482,10 @@
     }).join('');
   }
 
-  async function queryService(sid, serviceKey, session) {
+  async function queryService(sid, serviceKey, session, signal) {
     const resp = await fetch(`${WORKER_URL}?call_sid=${encodeURIComponent(sid)}&service=${serviceKey}`, {
-      headers: { 'X-Grafana-Session': session }
+      headers: { 'X-Grafana-Session': session },
+      signal,
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
@@ -433,6 +514,7 @@
     }
 
     _stopRequested = false;
+    _abortController = new AbortController();
     btn.disabled = true;
     stopBtn.style.display = 'inline-block';
     statusEl.style.display = 'block';
@@ -457,7 +539,7 @@
       refresh();
 
       try {
-        const rows = await queryService(sid, svc.key, session);
+        const rows = await queryService(sid, svc.key, session, _abortController.signal);
         results[svc.key] = rows;
 
         let resultText = 'Not detected';
@@ -479,6 +561,14 @@
 
         states[svc.key] = { result: resultText };
       } catch (err) {
+        if (err.name === 'AbortError' || _stopRequested) {
+          states[svc.key] = 'stopped';
+          for (const remaining of SERVICES.filter(s => states[s.key] === 'pending')) {
+            states[remaining.key] = 'stopped';
+          }
+          refresh();
+          break;
+        }
         states[svc.key] = { error: err.message };
       }
 
@@ -487,6 +577,7 @@
       refresh();
     }
 
+    _abortController = null;
     btn.disabled = false;
     stopBtn.style.display = 'none';
   }
@@ -575,11 +666,30 @@
   function clearAll() {
     document.getElementById('callSid').value = '';
     document.getElementById('refSidLine').textContent = '';
+    document.getElementById('mediaAnalysisCard').style.display = 'none';
+    document.getElementById('mediaAnalysisRow').style.display = 'none';
     ['mediaStreams','siprec','transcription','amd'].forEach(id => document.getElementById(id).value = '0');
     document.getElementById('mediaCustomVal').value = '';
     recalc();
     updateDisplays();
   }
+
+  // Auto-save session token if passed via URL fragment (#session=...)
+  (function() {
+    const hash = window.location.hash;
+    const match = hash.match(/[#&]session=([^&]+)/);
+    if (match) {
+      localStorage.setItem('grafana_session', decodeURIComponent(match[1]));
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  })();
+
+  // Build bookmarklet href using this page's own URL so it always points to the right place
+  (function() {
+    const toolUrl = window.location.origin + window.location.pathname;
+    const code = `(function(){var c=document.cookie.split(';').map(function(x){return x.trim();}).find(function(x){return x.startsWith('grafana_session=');});if(!c){alert('grafana_session cookie not found — make sure you are logged in to grafana.twilioinfra.com');return;}var tok=encodeURIComponent(c.split('=').slice(1).join('='));window.open('${toolUrl}#session='+tok,'_blank');})();`;
+    document.getElementById('bookmarkletLink').href = 'javascript:' + code;
+  })();
 
   recalc();
   updateDisplays();
