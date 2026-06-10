@@ -73,10 +73,12 @@ const server = http.createServer((req, res) => {
     '--output-format', 'stream-json',
     '--verbose',
     '--dangerously-skip-permissions',
+    '--plugin-dir', '/Users/rsuaan/voice-media-troubleshooting',
     '-p', `/fork-budget ${sid}`,
   ], {
     env: { ...process.env, HOME: '/Users/rsuaan' },
     cwd: '/Users/rsuaan',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   let lineBuf = '';
