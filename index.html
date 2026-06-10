@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Fork Budget Checker — Twilio Voice</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f4f5f7; color: #1f2937; min-height: 100vh; padding: 2rem; max-width: 860px; margin: 0 auto; }
+    h1 { font-size: 1.4rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .subtitle { font-size: 0.85rem; color: #6b7280; margin-bottom: 2rem; }
+    .card { background: #fff; border-radius: 10px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.5rem; }
+    label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 0.3rem; color: #374151; }
+    input[type=text] { width: 100%; padding: 0.55rem 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.9rem; transition: border-color 0.15s; }
+    input:focus { outline: none; border-color: #6366f1; }
+    button { padding: 0.6rem 1.4rem; border: none; border-radius: 6px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+    .btn-secondary { background: #e5e7eb; color: #374151; }
+    .btn-secondary:hover { background: #d1d5db; }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 0; border-bottom: 1px solid #f3f4f6; }
+    .toggle-row:last-child { border-bottom: none; }
+    .toggle-label { font-size: 0.875rem; font-weight: 500; }
+    .toggle-sub { font-size: 0.75rem; color: #9ca3af; margin-top: 0.15rem; }
+    .toggle-cost { font-size: 0.85rem; font-weight: 700; color: #6366f1; min-width: 50px; text-align: right; }
+    select { padding: 0.35rem 0.6rem; border: 1px solid #d1d5db; border-radius: 5px; font-size: 0.85rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th { text-align: left; padding: 0.5rem 0.75rem; background: #f9fafb; color: #6b7280; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #e5e7eb; }
+    td { padding: 0.55rem 0.75rem; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    .meter-wrap { margin-bottom: 1.25rem; }
+    .meter-label { font-size: 0.8rem; color: #6b7280; margin-bottom: 0.4rem; }
+    .meter-bar { height: 20px; background: #e5e7eb; border-radius: 999px; overflow: hidden; }
+    .meter-fill { height: 100%; border-radius: 999px; transition: width 0.4s, background 0.4s; }
+    .meter-ok { background: #10b981; } .meter-warn { background: #f59e0b; } .meter-over { background: #ef4444; }
+    .meter-count { font-size: 2rem; font-weight: 700; margin-top: 0.75rem; }
+    .count-ok { color: #10b981; } .count-warn { color: #f59e0b; } .count-over { color: #ef4444; } .count-zero { color: #9ca3af; }
+    .verdict { margin-top: 0.75rem; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; }
+    .verdict-ok { background: #d1fae5; color: #065f46; }
+    .verdict-warn { background: #fef3c7; color: #92400e; }
+    .verdict-over { background: #fee2e2; color: #991b1b; }
+    .note { font-size: 0.78rem; color: #6b7280; line-height: 1.5; }
+    hr { border: none; border-top: 1px solid #e5e7eb; margin: 1rem 0; }
+    .tip { background: #eff6ff; border-left: 3px solid #3b82f6; padding: 0.65rem 0.9rem; border-radius: 0 6px 6px 0; font-size: 0.82rem; color: #1e40af; margin-top: 1rem; line-height: 1.7; }
+    .pill { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
+    .pill-green { background: #d1fae5; color: #065f46; }
+    .pill-yellow { background: #fef3c7; color: #92400e; }
+    .pill-red { background: #fee2e2; color: #991b1b; }
+    .coverage-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.5rem; }
+    .coverage-table th { text-align: left; padding: 0.4rem 0.75rem; background: #f9fafb; color: #6b7280; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #e5e7eb; }
+    .coverage-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+    .coverage-table tr:last-child td { border-bottom: none; }
+    .ref-sid { font-size: 0.78rem; color: #9ca3af; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+
+<h1>Fork Budget Checker</h1>
+<p class="subtitle">Diagnose forked audio stream limit exhaustion on a Twilio Voice call. Internal Support use only.</p>
+
+<!-- Call Reference -->
+<div class="card">
+  <h2>1. Call Reference</h2>
+  <label>Call SID <span class="note">(for reference only)</span></label>
+  <input type="text" id="callSid" placeholder="CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" oninput="updateSid()" />
+</div>
+
+<!-- Features -->
+<div class="card">
+  <h2>2. Active Features on This Call</h2>
+  <p class="note" style="margin-bottom:1rem">Select what the customer reported was active on the call. Each feature consumes forks from the shared pool of <strong>4</strong>.</p>
+
+  <div class="toggle-row">
+    <div>
+      <div class="toggle-label">Media Streams</div>
+      <div class="toggle-sub">both_tracks = 2 forks per stream &nbsp;·&nbsp; single track = 1 fork per stream</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.75rem">
+      <select id="mediaStreams" onchange="recalc()">
+        <option value="0">Not used</option>
+        <option value="1">1 stream — single track (1 fork)</option>
+        <option value="2">1 stream — both_tracks (2 forks)</option>
+        <option value="3">2 streams — single track each (2 forks)</option>
+        <option value="4">2 streams — both_tracks each (4 forks)</option>
+        <option value="5">2 streams — 1× both_tracks + 1× single (3 forks)</option>
+        <option value="custom">Custom…</option>
+      </select>
+      <span class="toggle-cost" id="mediaCost">+0</span>
+    </div>
+  </div>
+  <div id="mediaCustomRow" style="display:none;padding:0.5rem 0 0.25rem 0">
+    <label style="font-size:0.78rem">Total fork count for Media Streams</label>
+    <input type="text" id="mediaCustomVal" placeholder="e.g. 3" oninput="recalc()" style="width:100px" />
+  </div>
+
+  <div class="toggle-row">
+    <div>
+      <div class="toggle-label">SIPREC</div>
+      <div class="toggle-sub">Default (both_tracks) = 2 forks &nbsp;·&nbsp; single track = 1 fork</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.75rem">
+      <select id="siprec" onchange="recalc()">
+        <option value="0">Not used</option>
+        <option value="1">Single track (1 fork)</option>
+        <option value="2">Default / both_tracks (2 forks)</option>
+      </select>
+      <span class="toggle-cost" id="siprecCost">+0</span>
+    </div>
+  </div>
+
+  <div class="toggle-row">
+    <div>
+      <div class="toggle-label">Real-Time Transcription</div>
+      <div class="toggle-sub">both_tracks (default) = 2 forks &nbsp;·&nbsp; single track = 1 fork</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.75rem">
+      <select id="transcription" onchange="recalc()">
+        <option value="0">Not used</option>
+        <option value="1">Single track (1 fork)</option>
+        <option value="2">both_tracks / default (2 forks)</option>
+      </select>
+      <span class="toggle-cost" id="transcriptionCost">+0</span>
+    </div>
+  </div>
+
+  <div class="toggle-row">
+    <div>
+      <div class="toggle-label">Answering Machine Detection (AMD)</div>
+      <div class="toggle-sub">Consumes 1 fork <em>while actively analyzing</em>. Released once AMD completes.</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.75rem">
+      <select id="amd" onchange="recalc()">
+        <option value="0">Not used / already completed</option>
+        <option value="1">Active during stream creation (1 fork)</option>
+      </select>
+      <span class="toggle-cost" id="amdCost">+0</span>
+    </div>
+  </div>
+</div>
+
+<!-- Result -->
+<div class="card">
+  <h2>3. Fork Budget Result</h2>
+  <div class="meter-wrap">
+    <div class="meter-label">Fork usage out of 4</div>
+    <div class="meter-bar"><div class="meter-fill meter-ok" id="meterFill" style="width:0%"></div></div>
+    <div class="meter-count count-zero" id="meterCount">0 / 4</div>
+    <div class="verdict" id="verdict" style="display:none"></div>
+  </div>
+  <hr/>
+  <table>
+    <thead><tr><th>Feature</th><th>Detail</th><th>Forks</th></tr></thead>
+    <tbody id="budgetTable">
+      <tr><td colspan="3" style="color:#9ca3af;font-style:italic;padding:1rem 0.75rem">No features selected yet.</td></tr>
+    </tbody>
+    <tfoot>
+      <tr style="font-weight:700;background:#f9fafb">
+        <td colspan="2" style="padding:0.55rem 0.75rem">Total</td>
+        <td style="padding:0.55rem 0.75rem" id="totalForks">0</td>
+      </tr>
+    </tfoot>
+  </table>
+  <div class="tip" id="tipBox" style="display:none"></div>
+  <div class="ref-sid" id="refSidLine"></div>
+</div>
+
+<!-- Coverage -->
+<div class="card">
+  <h2>ℹ️ What This Tool Can and Cannot Tell You</h2>
+  <p class="note" style="margin-bottom:1rem">This tool is fully manual — it calculates based on what you enter. Use the questions below to gather the right info from the customer.</p>
+  <table class="coverage-table">
+    <thead><tr><th>Feature</th><th>Detectable from Twilio data?</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Media Streams</strong></td>
+        <td><span class="pill pill-red">Not detectable</span></td>
+        <td>No stream SID or event in Voice Insights. Ask the customer how many streams and whether they use <code>both_tracks</code> or single track.</td>
+      </tr>
+      <tr>
+        <td><strong>SIPREC</strong></td>
+        <td><span class="pill pill-red">Not detectable</span></td>
+        <td>No SIPREC flag in Voice Insights. Ask the customer if SIPREC is active and which track mode (default = both_tracks = 2 forks).</td>
+      </tr>
+      <tr>
+        <td><strong>Real-Time Transcription</strong></td>
+        <td><span class="pill pill-red">Not detectable</span></td>
+        <td>No Transcription flag in Voice Insights. Ask the customer if <code>&lt;Transcription&gt;</code> is in their TwiML and which track mode.</td>
+      </tr>
+      <tr>
+        <td><strong>AMD</strong></td>
+        <td><span class="pill pill-yellow">Partial</span></td>
+        <td><code>postflight_answered_by</code> in Voice Insights ClickHouse confirms AMD ran (<code>machine_start</code>, <code>human</code>, etc.). Does not confirm whether it was still active when streams were created.</td>
+      </tr>
+      <tr>
+        <td><strong>Fork limit kill event</strong></td>
+        <td><span class="pill pill-red">Not detectable</span></td>
+        <td>The platform emits no diagnostic when a fork is killed. Only symptom: <code>stream-stopped</code> fires immediately with no <code>StreamError</code> after a <code>200</code> from the REST API.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip" style="margin-top:1rem">
+    <strong>Questions to ask the customer:</strong>
+    <ul style="margin:0.5rem 0 0 1.25rem;line-height:1.9">
+      <li>Are you using Media Streams? If yes — how many, and are they <code>both_tracks</code> or single track?</li>
+      <li>Are you using SIPREC? If yes — default config (both_tracks) or single track?</li>
+      <li>Are you using <code>&lt;Transcription&gt;</code>? If yes — which track mode?</li>
+      <li>Is AMD (<code>MachineDetection=Enable</code>) active on this call?</li>
+      <li>Are streams being created at the start of the call, or after AMD completes?</li>
+    </ul>
+  </div>
+</div>
+
+<button class="btn-secondary" onclick="clearAll()">Clear / Reset</button>
+
+<script>
+  const LIMIT = 4;
+  const MEDIA_MAP   = { '0':0,'1':1,'2':2,'3':2,'4':4,'5':3 };
+  const MEDIA_LABEL = { '1':'1 stream, single track','2':'1 stream, both_tracks','3':'2 streams, single track each','4':'2 streams, both_tracks each','5':'2 streams (both_tracks + single track)' };
+
+  function updateSid() {
+    const sid = document.getElementById('callSid').value.trim();
+    document.getElementById('refSidLine').textContent = sid ? 'Call SID: ' + sid : '';
+  }
+
+  function recalc() {
+    const rows = [];
+
+    const msVal = document.getElementById('mediaStreams').value;
+    const customRow = document.getElementById('mediaCustomRow');
+    if (msVal === 'custom') {
+      customRow.style.display = 'block';
+      const cv = parseInt(document.getElementById('mediaCustomVal').value) || 0;
+      document.getElementById('mediaCost').textContent = '+' + cv;
+      if (cv > 0) rows.push({ feature: 'Media Streams', detail: 'custom (' + cv + ' forks)', forks: cv });
+    } else {
+      customRow.style.display = 'none';
+      const forks = MEDIA_MAP[msVal] || 0;
+      document.getElementById('mediaCost').textContent = '+' + forks;
+      if (forks > 0) rows.push({ feature: 'Media Streams', detail: MEDIA_LABEL[msVal] || '', forks });
+    }
+
+    const sip = parseInt(document.getElementById('siprec').value);
+    document.getElementById('siprecCost').textContent = '+' + sip;
+    if (sip > 0) rows.push({ feature: 'SIPREC', detail: sip === 2 ? 'both_tracks (default)' : 'single track', forks: sip });
+
+    const trans = parseInt(document.getElementById('transcription').value);
+    document.getElementById('transcriptionCost').textContent = '+' + trans;
+    if (trans > 0) rows.push({ feature: 'Real-Time Transcription', detail: trans === 2 ? 'both_tracks (default)' : 'single track', forks: trans });
+
+    const amd = parseInt(document.getElementById('amd').value);
+    document.getElementById('amdCost').textContent = '+' + amd;
+    if (amd > 0) rows.push({ feature: 'AMD', detail: 'active during stream creation', forks: 1 });
+
+    const total = rows.reduce((s, r) => s + r.forks, 0);
+
+    const tbody = document.getElementById('budgetTable');
+    tbody.innerHTML = rows.length === 0
+      ? '<tr><td colspan="3" style="color:#9ca3af;font-style:italic;padding:1rem 0.75rem">No features selected yet.</td></tr>'
+      : rows.map(r => `<tr>
+          <td><strong>${r.feature}</strong></td>
+          <td style="color:#6b7280;font-size:0.82rem">${r.detail}</td>
+          <td><strong>${r.forks}</strong></td>
+        </tr>`).join('');
+
+    document.getElementById('totalForks').textContent = total;
+
+    const pct = Math.min(total / LIMIT * 100, 100);
+    const fill = document.getElementById('meterFill');
+    fill.style.width = (total === 0 ? 0 : Math.max(pct, 4)) + '%';
+
+    const count   = document.getElementById('meterCount');
+    const verdict = document.getElementById('verdict');
+    const tip     = document.getElementById('tipBox');
+
+    if (total === 0) {
+      fill.className = 'meter-fill meter-ok';
+      count.textContent = '0 / 4'; count.className = 'meter-count count-zero';
+      verdict.style.display = 'none'; tip.style.display = 'none';
+    } else if (total < LIMIT) {
+      fill.className = 'meter-fill meter-ok';
+      count.textContent = total + ' / 4'; count.className = 'meter-count count-ok';
+      verdict.style.display = 'block'; verdict.className = 'verdict verdict-ok';
+      verdict.textContent = '✅ Within limit — ' + (LIMIT - total) + ' fork' + (LIMIT - total !== 1 ? 's' : '') + ' remaining.';
+      tip.style.display = 'none';
+    } else if (total === LIMIT) {
+      fill.className = 'meter-fill meter-warn';
+      count.textContent = total + ' / 4'; count.className = 'meter-count count-warn';
+      verdict.style.display = 'block'; verdict.className = 'verdict verdict-warn';
+      verdict.textContent = '⚠️ At the limit — any additional forked feature on this call will be silently killed.';
+      tip.style.display = 'block';
+      tip.innerHTML = '<strong>Advise the customer:</strong> Do not add more forked features simultaneously. If using AMD, start Media Streams or Transcription only after AMD completes via <code>AsyncAmdStatusCallback</code>.';
+    } else {
+      fill.className = 'meter-fill meter-over';
+      count.textContent = total + ' / 4'; count.className = 'meter-count count-over';
+      verdict.style.display = 'block'; verdict.className = 'verdict verdict-over';
+      verdict.textContent = '🚨 Limit exceeded by ' + (total - LIMIT) + ' fork' + (total - LIMIT !== 1 ? 's' : '') + ' — over-limit resource(s) were silently killed.';
+      tip.style.display = 'block';
+      tip.innerHTML = '<strong>Expected platform behavior (TECHVOICE-3532 / TECHVOICE-3634).</strong> The over-limit resource is killed silently — <code>stream-stopped</code> fires immediately with no <code>StreamError</code>, REST API still returned 200.<br/><br/>'
+        + '<strong>Workarounds to share with the customer:</strong><ul style="margin:0.5rem 0 0 1.25rem">'
+        + '<li>Reduce total fork usage to ≤4 — switch streams to single-track mode where possible.</li>'
+        + '<li>If AMD is in use, start Media Streams / Transcription only after AMD completes via <code>AsyncAmdStatusCallback</code>.</li>'
+        + '<li>Avoid running SIPREC alongside multiple both_tracks streams.</li></ul>';
+    }
+  }
+
+  function clearAll() {
+    document.getElementById('callSid').value = '';
+    document.getElementById('refSidLine').textContent = '';
+    ['mediaStreams','siprec','transcription','amd'].forEach(id => document.getElementById(id).value = '0');
+    document.getElementById('mediaCustomVal').value = '';
+    recalc();
+  }
+
+  recalc();
+</script>
+</body>
+</html>
