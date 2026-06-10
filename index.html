@@ -313,27 +313,14 @@
     btn.textContent = 'Analysing…';
     statusEl.style.display = 'block';
 
-    const steps = [
-      'Checking Media Streams',
-      'Checking Transcription',
-      'Checking SIPREC',
-      'Checking AMD',
-    ];
-    let stepIndex = 0;
-    let dotCount = 0;
-    statusEl.innerHTML = `<span style="color:#6b7280;font-family:monospace" id="runningStatus"></span>`;
+    const spinFrames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+    let spinIdx = 0;
+    statusEl.innerHTML = `<span style="color:#6366f1;font-family:monospace" id="runningStatus">${spinFrames[0]} Querying all 4 services in parallel…</span>`;
     const ticker = setInterval(() => {
-      const dots = '.'.repeat((dotCount % 3) + 1);
-      const lines = steps.map((s, i) => {
-        if (i < stepIndex) return `<span style="color:#10b981">✓ ${s}</span>`;
-        if (i === stepIndex) return `<span style="color:#6366f1">⟳ ${s}${dots}</span>`;
-        return `<span style="color:#d1d5db">· ${s}</span>`;
-      }).join('<br>');
+      spinIdx = (spinIdx + 1) % spinFrames.length;
       const el = document.getElementById('runningStatus');
-      if (el) el.innerHTML = lines;
-      dotCount++;
-      if (dotCount % 6 === 0 && stepIndex < steps.length - 1) stepIndex++;
-    }, 400);
+      if (el) el.textContent = `${spinFrames[spinIdx]} Querying all 4 services in parallel…`;
+    }, 100);
     statusEl._ticker = ticker;
 
     const session = localStorage.getItem('grafana_session');
