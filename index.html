@@ -361,6 +361,15 @@
   let elapsedTimer = null;
   let watchdog = null;
 
+  function fmtElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60), rs = s % 60;
+    if (m < 60) return m + 'm ' + rs + 's';
+    const h = Math.floor(m / 60), rm = m % 60;
+    return h + 'h ' + rm + 'm';
+  }
+
   const FEATURES = [
     { key: 'media',         label: 'Media Streams' },
     { key: 'transcription', label: 'Real-Time Transcription' },
@@ -474,14 +483,6 @@
     renderFeatureRows(rows);
 
     const startTime = Date.now();
-    function fmtElapsed(ms) {
-      const s = Math.floor(ms / 1000);
-      if (s < 60) return s + 's';
-      const m = Math.floor(s / 60), rs = s % 60;
-      if (m < 60) return m + 'm ' + rs + 's';
-      const h = Math.floor(m / 60), rm = m % 60;
-      return h + 'h ' + rm + 'm';
-    }
 
     elapsedTimer = setInterval(() => {
       document.getElementById('progressElapsed').textContent = fmtElapsed(Date.now() - startTime);
