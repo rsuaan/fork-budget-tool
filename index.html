@@ -61,8 +61,8 @@
 <!-- Call Reference -->
 <div class="card">
   <h2>1. Call Reference</h2>
-  <label>Call SID</label>
-  <input type="text" id="callSid" placeholder="CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" oninput="updateSid()" />
+  <label>Call SID <span style="font-weight:400;color:#9ca3af;font-size:0.78rem">— separate multiple with comma or space to compare</span></label>
+  <input type="text" id="callSid" placeholder="CA… or CA…, CA… CA…" oninput="updateSid()" />
 
   <div style="margin-top:1rem;padding:1rem;background:#f8f7ff;border:1px solid #e0e7ff;border-radius:8px">
     <div style="font-size:0.85rem;font-weight:600;color:#4338ca;margin-bottom:0.4rem">⚡ Auto-detect features</div>
@@ -378,11 +378,19 @@
     { key: 'amd',           label: 'AMD' },
   ];
 
+  function parseSids(raw) {
+    // Accept comma, space, "or"/"OR" as separators
+    return raw.split(/[\s,]+|(?:\bor\b)/i)
+      .map(s => s.trim().toUpperCase())
+      .filter(s => /^CA[0-9A-F]{32}$/i.test(s));
+  }
+
   function updateSid() {
-    const sid = document.getElementById('callSid').value.trim();
-    document.getElementById('refSidLine').textContent = sid ? 'Call SID: ' + sid : '';
-    document.getElementById('mediaAnalysisCard').style.display =
-      /^CA[0-9a-f]{32}$/.test(sid) ? 'block' : 'none';
+    const raw = document.getElementById('callSid').value.trim();
+    const sids = parseSids(raw);
+    const first = sids[0] || '';
+    document.getElementById('refSidLine').textContent = sids.length ? 'Call SID: ' + sids.join(' · ') : '';
+    document.getElementById('mediaAnalysisCard').style.display = first ? 'block' : 'none';
     // Clear previous results when SID changes
     document.getElementById('progressWrap').style.display = 'none';
     document.getElementById('featureRows').style.display = 'none';
@@ -467,14 +475,13 @@
   }
 
   async function analyseCall() {
-    const sid = document.getElementById('callSid').value.trim();
-    if (!/^CA[0-9a-f]{32}$/.test(sid)) {
+    const sids = parseSids(document.getElementById('callSid').value);
+    if (!sids.length) {
       document.getElementById('featureRows').style.display = 'flex';
       document.getElementById('featureRows').innerHTML = '<span style="color:#ef4444;font-size:0.82rem">Enter a valid Call SID (CA + 32 hex chars).</span>';
       return;
     }
 
-    // Check bridge is up
     try {
       const ping = await fetch(`${BRIDGE}/ping`, { signal: AbortSignal.timeout(2000) });
       if (!ping.ok) throw new Error();
@@ -485,107 +492,136 @@
     }
 
     setAnalysing(true);
-    const rows = {};
     document.getElementById('progressWrap').style.display = 'block';
     document.getElementById('progressBar').style.width = '0%';
     document.getElementById('progressBar').style.background = '#6366f1';
-    document.getElementById('progressCount').textContent = '0 / 4';
+    document.getElementById('progressCount').textContent = '0 / ' + (sids.length * 4);
     document.getElementById('progressLabel').textContent = 'Connecting…';
     document.getElementById('progressElapsed').textContent = '0s';
     document.getElementById('authBanner').style.display = 'none';
-    renderFeatureRows(rows);
+    document.getElementById('featureRows').style.display = 'flex';
+    document.getElementById('featureRows').innerHTML = '';
 
     const startTime = Date.now();
-
     elapsedTimer = setInterval(() => {
       document.getElementById('progressElapsed').textContent = fmtElapsed(Date.now() - startTime);
     }, 1000);
 
+    let totalDone = 0;
+    const totalQueries = sids.length * 4;
     let authInProgress = false;
-    // Watchdog only fires if no heartbeat/progress for 60s (Grafana queries can take 30-90s).
-    // Bridge sends a heartbeat every 8s while Claude is alive, so this only triggers on a true stall.
-    const STALL_AFTER = 60;
 
-    function pauseWatchdog() {
-      clearTimeout(watchdog);
-      watchdog = null;
-    }
-
+    function pauseWatchdog() { clearTimeout(watchdog); watchdog = null; }
     function resetWatchdog() {
       if (authInProgress) return;
       clearTimeout(watchdog);
       watchdog = setTimeout(() => {
-        const s = Math.floor((Date.now() - startTime) / 1000);
         document.getElementById('progressLabel').textContent = 'Stalled';
         document.getElementById('progressBar').style.background = '#ef4444';
-        document.getElementById('featureRows').innerHTML +=
-          `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">
-            No activity for 60s after ${fmtElapsed(s * 1000)} total — bridge or Grafana may be down. Press Stop and try again.
-          </div>`;
         if (_es) { _es.close(); _es = null; }
         finish();
-      }, STALL_AFTER * 1000);
+      }, 60000);
     }
-
     const finish = (showPcapBtn) => {
       clearInterval(elapsedTimer); elapsedTimer = null;
       clearTimeout(watchdog); watchdog = null;
       setAnalysing(false);
-      if (showPcapBtn) {
-        document.getElementById('pcapBtnWrap').style.display = 'block';
-      }
+      if (showPcapBtn) document.getElementById('pcapBtnWrap').style.display = 'block';
     };
 
-    _es = new EventSource(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`);
-    resetWatchdog();
+    // Run each SID sequentially
+    for (let i = 0; i < sids.length; i++) {
+      const sid = sids[i];
+      const rows = {};
 
-    _es.onmessage = e => {
-      const msg = JSON.parse(e.data);
+      // Section header for this SID
+      const section = document.createElement('div');
+      section.style.cssText = 'width:100%;margin-top:' + (i > 0 ? '0.75rem' : '0');
+      if (sids.length > 1) {
+        section.innerHTML = `<div style="font-size:0.75rem;font-weight:600;color:#6b7280;margin-bottom:0.3rem;padding:0.3rem 0.5rem;background:#f3f4f6;border-radius:4px;font-family:monospace">${sid}</div>`;
+      }
+      const rowsEl = document.createElement('div');
+      rowsEl.style.cssText = 'display:flex;flex-direction:column;gap:0.3rem';
+      section.appendChild(rowsEl);
+      document.getElementById('featureRows').appendChild(section);
 
-      if (msg.type === 'connected') {
+      const renderRows = () => {
+        rowsEl.innerHTML = FEATURES.map(f => {
+          const row = rows[f.key] || { state: 'pending' };
+          let icon, color, detail;
+          if      (row.state === 'pending')  { icon = '·'; color = '#9ca3af'; detail = ''; }
+          else if (row.state === 'querying') { icon = '<span style="display:inline-block;animation:spin 1s linear infinite">⟳</span>'; color = '#6366f1'; detail = 'Querying…'; }
+          else if (row.state === 'done')     { icon = '✓'; color = '#10b981'; detail = row.detail; }
+          else if (row.state === 'none')     { icon = '–'; color = '#9ca3af'; detail = 'Not found'; }
+          else                               { icon = '✕'; color = '#ef4444'; detail = row.detail || 'Error'; }
+          return `<div style="display:flex;align-items:center;gap:0.6rem;padding:0.45rem 0.6rem;background:#f9fafb;border-radius:6px">
+            <span style="color:${color};font-weight:700;width:1rem;text-align:center">${icon}</span>
+            <span style="font-size:0.85rem;font-weight:500;flex:1">${f.label}</span>
+            <span style="font-size:0.78rem;color:${color}">${detail}</span>
+          </div>`;
+        }).join('');
+      };
+      renderRows();
+
+      // Wait for this SID to complete before starting next
+      await new Promise(resolve => {
+        _es = new EventSource(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`);
         resetWatchdog();
-        document.getElementById('progressLabel').textContent = 'Querying…';
-      }
-      else if (msg.type === 'auth') {
-        authInProgress = true;
-        pauseWatchdog();
-        document.getElementById('authBanner').style.display = 'block';
-        document.getElementById('authMsg').textContent = msg.message;
-      }
-      else if (msg.type === 'auth_complete') {
-        authInProgress = false;
-        document.getElementById('authBanner').style.display = 'none';
-        resetWatchdog();
-      }
-      else if (msg.type === 'heartbeat') {
-        // Claude is alive, Grafana is just slow — reset stall timer silently
-        if (!authInProgress) resetWatchdog();
-      }
-      else if (msg.type === 'progress') {
-        if (!authInProgress) resetWatchdog();
-        rows[msg.key] = { state: msg.state, detail: msg.detail };
-        renderFeatureRows(rows);
-        updateProgress(rows);
-      }
-      else if (msg.type === 'result') {
-        applyResults(msg.params);
-      }
-      else if (msg.type === 'done') {
-        _es.close(); _es = null;
-        finish(true);
-      }
-      else if (msg.type === 'error') {
-        document.getElementById('featureRows').innerHTML +=
-          `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">${msg.message}</div>`;
-        _es.close(); _es = null;
-        finish(false);
-      }
-    };
 
-    _es.onerror = () => {
-      // EventSource auto-reconnects on transient errors — only treat as fatal if Claude is done.
-      // The stall watchdog will fire after 60s if it truly dies.
-    };
+        _es.onmessage = e => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'connected') {
+            resetWatchdog();
+            document.getElementById('progressLabel').textContent = sids.length > 1
+              ? `Querying ${i + 1} / ${sids.length}…`
+              : 'Querying…';
+          }
+          else if (msg.type === 'auth') {
+            authInProgress = true;
+            pauseWatchdog();
+            document.getElementById('authBanner').style.display = 'block';
+            document.getElementById('authMsg').textContent = msg.message;
+          }
+          else if (msg.type === 'auth_complete') {
+            authInProgress = false;
+            document.getElementById('authBanner').style.display = 'none';
+            resetWatchdog();
+          }
+          else if (msg.type === 'heartbeat') {
+            if (!authInProgress) resetWatchdog();
+          }
+          else if (msg.type === 'progress') {
+            if (!authInProgress) resetWatchdog();
+            rows[msg.key] = { state: msg.state, detail: msg.detail };
+            renderRows();
+            // Update global progress bar
+            const done = Object.values(rows).filter(r => r.state !== 'pending' && r.state !== 'querying').length;
+            const pct = Math.round((totalDone + done) / totalQueries * 100);
+            document.getElementById('progressBar').style.width = pct + '%';
+            document.getElementById('progressCount').textContent = (totalDone + done) + ' / ' + totalQueries;
+          }
+          else if (msg.type === 'result') {
+            applyResults(msg.params);
+          }
+          else if (msg.type === 'done') {
+            _es.close(); _es = null;
+            totalDone += 4;
+            document.getElementById('progressBar').style.width = Math.round(totalDone / totalQueries * 100) + '%';
+            if (totalDone >= totalQueries) document.getElementById('progressBar').style.background = '#10b981';
+            document.getElementById('progressLabel').textContent = totalDone >= totalQueries ? 'Complete' : `Done ${i + 1} / ${sids.length}`;
+            resolve();
+          }
+          else if (msg.type === 'error') {
+            rowsEl.innerHTML += `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">${msg.message}</div>`;
+            _es.close(); _es = null;
+            resolve();
+          }
+        };
+        _es.onerror = () => { /* watchdog handles true stalls */ };
+      });
+    }
+
+    finish(true);
   }
 
   function runPcapAnalysis() {
