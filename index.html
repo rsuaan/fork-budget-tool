@@ -99,10 +99,15 @@
       Click Analyse to automatically detect which features were active on this call and calculate the fork budget.
       <span id="sessionIndicator"></span>
     </div>
-    <button onclick="analyzeCall()" id="analyzeBtn"
-      style="background:#6366f1;color:#fff;border:none;padding:0.5rem 1.1rem;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer">
-      Analyse
-    </button>
+    <div style="display:flex;gap:0.6rem;align-items:center">
+      <button onclick="analyzeCall()" id="analyzeBtn"
+        style="background:#6366f1;color:#fff;border:none;padding:0.5rem 1.1rem;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer">
+        Analyse
+      </button>
+      <button onclick="stopAnalysis()" id="stopBtn" style="display:none;background:#fee2e2;color:#991b1b;border:none;padding:0.5rem 1rem;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer">
+        ✕ Stop
+      </button>
+    </div>
     <div id="analyzeStatus" style="margin-top:0.75rem;font-size:0.82rem;display:none"></div>
   </div>
 </div>
@@ -368,93 +373,123 @@
       : ' <span style="color:#f59e0b;font-weight:600">⚠ No session — click ⚙ Grafana Auth to add one</span>';
   }
 
+  let _stopRequested = false;
+
+  function stopAnalysis() {
+    _stopRequested = true;
+  }
+
+  const SERVICES = [
+    { key: 'media',         label: 'Media Streams',          service: 'voice-media-streamer' },
+    { key: 'transcription', label: 'Real-Time Transcription', service: 'realtime-transcription-service' },
+    { key: 'siprec',        label: 'SIPREC',                  service: 'voice-siprec-service' },
+    { key: 'amd',           label: 'AMD',                     service: 'voice-amd-service' },
+  ];
+
+  function renderServiceRows(states) {
+    return SERVICES.map(s => {
+      const st = states[s.key];
+      let icon, color, detail;
+      if (st === 'pending')  { icon = '·'; color = '#d1d5db'; detail = 'Waiting…'; }
+      else if (st === 'running') { icon = '⟳'; color = '#6366f1'; detail = `Querying ${s.service}…`; }
+      else if (st === 'stopped') { icon = '✕'; color = '#f59e0b'; detail = 'Stopped'; }
+      else if (st.error)     { icon = '✕'; color = '#ef4444'; detail = st.error; }
+      else                   { icon = '✓'; color = '#10b981'; detail = st.result; }
+      return `<div style="display:flex;align-items:baseline;gap:0.5rem;padding:0.2rem 0">
+        <span style="color:${color};font-weight:700;width:1rem;text-align:center">${icon}</span>
+        <span style="font-size:0.82rem;color:#374151;min-width:180px">${s.label}</span>
+        <span style="font-size:0.78rem;color:${color}">${detail}</span>
+      </div>`;
+    }).join('');
+  }
+
+  async function queryService(sid, serviceKey, session) {
+    const resp = await fetch(`${WORKER_URL}?call_sid=${encodeURIComponent(sid)}&service=${serviceKey}`, {
+      headers: { 'X-Grafana-Session': session }
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    return (await resp.json()).rows || [];
+  }
+
   async function analyzeCall() {
     const sid = document.getElementById('callSid').value.trim();
     const statusEl = document.getElementById('analyzeStatus');
     const btn = document.getElementById('analyzeBtn');
+    const stopBtn = document.getElementById('stopBtn');
+
     if (!sid || !sid.startsWith('CA')) {
       statusEl.style.display = 'block';
       statusEl.innerHTML = '<span style="color:#ef4444">Please enter a valid Call SID (starts with CA).</span>';
       return;
     }
-    btn.disabled = true;
-    btn.textContent = 'Analysing…';
-    statusEl.style.display = 'block';
-
-    const spinFrames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
-    let spinIdx = 0;
-    statusEl.innerHTML = `<span style="color:#6366f1;font-family:monospace" id="runningStatus"></span>
-      <div style="font-size:0.75rem;color:#9ca3af;margin-top:0.35rem;line-height:1.7">
-        Querying: voice-media-streamer · realtime-transcription-service · voice-siprec-service · voice-amd-service
-      </div>`;
-    const ticker = setInterval(() => {
-      spinIdx = (spinIdx + 1) % spinFrames.length;
-      const el = document.getElementById('runningStatus');
-      if (el) el.textContent = `${spinFrames[spinIdx]} Querying all 4 services in parallel…`;
-    }, 100);
-    statusEl._ticker = ticker;
 
     const session = localStorage.getItem('grafana_session');
     if (!session) {
       statusEl.style.display = 'block';
       statusEl.innerHTML = '<span style="color:#f59e0b;font-weight:600">⚠ No Grafana session saved. Click ⚙ Grafana Auth above to add one.</span>';
-      btn.disabled = false;
-      btn.textContent = 'Analyse';
       return;
     }
 
-    try {
-      const resp = await fetch(`${WORKER_URL}?call_sid=${encodeURIComponent(sid)}`, {
-        headers: { 'X-Grafana-Session': session }
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-        throw new Error(err.error || `HTTP ${resp.status}`);
+    _stopRequested = false;
+    btn.disabled = true;
+    stopBtn.style.display = 'inline-block';
+    statusEl.style.display = 'block';
+
+    const states = { media: 'pending', transcription: 'pending', siprec: 'pending', amd: 'pending' };
+    const results = {};
+
+    const refresh = () => { statusEl.innerHTML = `<div style="font-family:monospace;line-height:1.9">${renderServiceRows(states)}</div>`; };
+    refresh();
+
+    for (const svc of SERVICES) {
+      if (_stopRequested) {
+        states[svc.key] = 'stopped';
+        for (const remaining of SERVICES.filter(s => states[s.key] === 'pending')) {
+          states[remaining.key] = 'stopped';
+        }
+        refresh();
+        break;
       }
-      const { mediaRows, transcRows, siprecRows, amdRows } = await resp.json();
 
-      // Media Streams
-      const msCount = mediaRows.length;
-      document.getElementById('mediaStreams').value = msCount === 0 ? '0' : msCount === 1 ? '2' : '4';
+      states[svc.key] = 'running';
+      refresh();
 
-      // Transcription — check channels
-      let transVal = '0';
-      if (transcRows.length > 0) {
-        const allChannels = transcRows.flatMap(r => Array.isArray(r.channels) ? r.channels : [r.channels]).join(',');
-        const hasIn = allChannels.includes('inbound');
-        const hasOut = allChannels.includes('outbound');
-        transVal = (hasIn && hasOut) ? '2' : '1';
+      try {
+        const rows = await queryService(sid, svc.key, session);
+        results[svc.key] = rows;
+
+        let resultText = 'Not detected';
+        if (svc.key === 'media' && rows.length > 0) {
+          resultText = `${rows.length} stream(s) detected`;
+          document.getElementById('mediaStreams').value = rows.length === 1 ? '2' : '4';
+        } else if (svc.key === 'transcription' && rows.length > 0) {
+          const allCh = rows.flatMap(r => Array.isArray(r.channels) ? r.channels : [r.channels]).join(',');
+          const both = allCh.includes('inbound') && allCh.includes('outbound');
+          resultText = both ? 'both_tracks detected' : 'single track detected';
+          document.getElementById('transcription').value = both ? '2' : '1';
+        } else if (svc.key === 'siprec' && rows.length > 0) {
+          resultText = `${rows.length} session(s) detected`;
+          document.getElementById('siprec').value = '2';
+        } else if (svc.key === 'amd' && rows.length > 0) {
+          resultText = 'Active — ran on this call';
+          document.getElementById('amd').value = '1';
+        }
+
+        states[svc.key] = { result: resultText };
+      } catch (err) {
+        states[svc.key] = { error: err.message };
       }
-      document.getElementById('transcription').value = transVal;
-
-      // SIPREC
-      document.getElementById('siprec').value = siprecRows.length > 0 ? '2' : '0';
-
-      // AMD
-      document.getElementById('amd').value = amdRows.length > 0 ? '1' : '0';
 
       recalc();
-
-      const found = [];
-      if (msCount > 0) found.push(`${msCount} Media Stream(s)`);
-      if (siprecRows.length > 0) found.push('SIPREC');
-      if (transVal !== '0') found.push('Transcription');
-      if (amdRows.length > 0) found.push('AMD');
-
-      clearInterval(statusEl._ticker);
       updateDisplays();
-      statusEl.innerHTML = found.length
-        ? `<span style="color:#10b981;font-weight:600">✓ Detected: ${found.join(', ')}. Fork budget updated.</span>`
-        : `<span style="color:#6b7280">No active features found for this Call SID in the last 30 days.</span>`;
-
-    } catch (err) {
-      clearInterval(statusEl._ticker);
-      statusEl.innerHTML = `<span style="color:#ef4444;font-weight:600">Analysis failed: ${err.message}</span>`;
-    } finally {
-      clearInterval(statusEl._ticker);
-      btn.disabled = false;
-      btn.textContent = 'Analyse';
+      refresh();
     }
+
+    btn.disabled = false;
+    stopBtn.style.display = 'none';
   }
 
   function recalc() {

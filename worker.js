@@ -71,45 +71,54 @@ export default {
       });
     }
 
+    const service = url.searchParams.get('service');
+
+    const QUERIES = {
+      media: `SELECT LogAttributes['session_id'] AS stream_sid, min(Timestamp) AS started
+        FROM otel_twlo.otel_logs
+        WHERE Timestamp >= now() - INTERVAL 30 DAY
+          AND ServiceName = 'voice-media-streamer'
+          AND LogAttributes['call_sid'] = '${sid}'
+          AND LogAttributes['session_id'] != ''
+        GROUP BY stream_sid ORDER BY started`,
+
+      transcription: `SELECT LogAttributes['stream_id'] AS stream_sid,
+          extractAll(Body, 'channel=(inbound|outbound)') AS channels
+        FROM otel_twlo.otel_logs
+        WHERE Timestamp >= now() - INTERVAL 30 DAY
+          AND ServiceName = 'realtime-transcription-service'
+          AND LogAttributes['call_sid'] = '${sid}'
+          AND LogAttributes['stream_id'] != ''
+          AND Body LIKE '%State change%ESTABLISHED%'
+        GROUP BY stream_sid, channels LIMIT 20`,
+
+      siprec: `SELECT LogAttributes['stream_id'] AS stream_sid, count() AS events
+        FROM otel_twlo.otel_logs
+        WHERE Timestamp >= now() - INTERVAL 30 DAY
+          AND ServiceName = 'voice-siprec-service'
+          AND LogAttributes['call_sid'] = '${sid}'
+          AND LogAttributes['stream_id'] != ''
+        GROUP BY stream_sid ORDER BY events DESC LIMIT 10`,
+
+      amd: `SELECT Body FROM otel_twlo.otel_logs
+        WHERE Timestamp >= now() - INTERVAL 30 DAY
+          AND ServiceName = 'voice-amd-service'
+          AND LogAttributes['call_sid'] = '${sid}'
+        LIMIT 1`,
+    };
+
     try {
-      const [mediaRows, transcRows, siprecRows, amdRows] = await Promise.all([
-        gq(auth, `
-          SELECT LogAttributes['session_id'] AS stream_sid, min(Timestamp) AS started
-          FROM otel_twlo.otel_logs
-          WHERE Timestamp >= now() - INTERVAL 30 DAY
-            AND ServiceName = 'voice-media-streamer'
-            AND LogAttributes['call_sid'] = '${sid}'
-            AND LogAttributes['session_id'] != ''
-          GROUP BY stream_sid ORDER BY started`),
+      if (service && QUERIES[service]) {
+        const rows = await gq(auth, QUERIES[service]);
+        return new Response(JSON.stringify({ service, rows }), {
+          headers: { ...CORS, 'Content-Type': 'application/json' },
+        });
+      }
 
-        gq(auth, `
-          SELECT LogAttributes['stream_id'] AS stream_sid,
-                 extractAll(Body, 'channel=(inbound|outbound)') AS channels
-          FROM otel_twlo.otel_logs
-          WHERE Timestamp >= now() - INTERVAL 30 DAY
-            AND ServiceName = 'realtime-transcription-service'
-            AND LogAttributes['call_sid'] = '${sid}'
-            AND LogAttributes['stream_id'] != ''
-            AND Body LIKE '%State change%ESTABLISHED%'
-          GROUP BY stream_sid, channels LIMIT 20`),
-
-        gq(auth, `
-          SELECT LogAttributes['stream_id'] AS stream_sid, count() AS events
-          FROM otel_twlo.otel_logs
-          WHERE Timestamp >= now() - INTERVAL 30 DAY
-            AND ServiceName = 'voice-siprec-service'
-            AND LogAttributes['call_sid'] = '${sid}'
-            AND LogAttributes['stream_id'] != ''
-          GROUP BY stream_sid ORDER BY events DESC LIMIT 10`),
-
-        gq(auth, `
-          SELECT Body FROM otel_twlo.otel_logs
-          WHERE Timestamp >= now() - INTERVAL 30 DAY
-            AND ServiceName = 'voice-amd-service'
-            AND LogAttributes['call_sid'] = '${sid}'
-          LIMIT 1`),
-      ]);
-
+      // fallback: run all 4
+      const [mediaRows, transcRows, siprecRows, amdRows] = await Promise.all(
+        ['media','transcription','siprec','amd'].map(s => gq(auth, QUERIES[s]))
+      );
       return new Response(
         JSON.stringify({ mediaRows, transcRows, siprecRows, amdRows }),
         { headers: { ...CORS, 'Content-Type': 'application/json' } }
