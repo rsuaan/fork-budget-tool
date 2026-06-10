@@ -4,7 +4,7 @@ const DS_UID = 'dffjhhyy5wetcf';
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Grafana-Session',
 };
 
 function isValidSid(sid) {
