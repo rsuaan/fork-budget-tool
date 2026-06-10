@@ -57,6 +57,9 @@ function startJob(sid, prompt) {
 
   job.child = child;
 
+  // Heartbeat every 8s so the browser watchdog knows Claude is alive during slow Grafana queries
+  const heartbeat = setInterval(() => broadcast(job, { type: 'heartbeat' }), 8000);
+
   let lineBuf = '';
   let oauthOpened = false;
   let authPending = false;
@@ -116,6 +119,7 @@ function startJob(sid, prompt) {
   });
 
   child.on('close', () => {
+    clearInterval(heartbeat);
     if (lineBuf.trim()) handleLine(lineBuf);
     broadcast(job, { type: 'done' });
     for (const res of job.clients) { try { res.end(); } catch {} }

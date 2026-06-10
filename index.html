@@ -476,8 +476,9 @@
 
     let watchdog = null;
     let authInProgress = false;
-    const WARN_AFTER = 30;
-    const ABORT_AFTER = 120;
+    // Watchdog only fires if no heartbeat/progress for 60s (Grafana queries can take 30-90s).
+    // Bridge sends a heartbeat every 8s while Claude is alive, so this only triggers on a true stall.
+    const STALL_AFTER = 60;
 
     function pauseWatchdog() {
       clearTimeout(watchdog);
@@ -485,27 +486,19 @@
     }
 
     function resetWatchdog() {
-      if (authInProgress) return; // suspend during OAuth
+      if (authInProgress) return;
       clearTimeout(watchdog);
       watchdog = setTimeout(() => {
         const s = Math.floor((Date.now() - startTime) / 1000);
-        if (s >= ABORT_AFTER) {
-          document.getElementById('progressLabel').textContent = 'Timed out';
-          document.getElementById('progressBar').style.background = '#ef4444';
-          document.getElementById('featureRows').innerHTML +=
-            `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">
-              No response from Claude for ${fmtElapsed(s * 1000)} — query may have stalled. Press Stop and try again.
-            </div>`;
-          if (_es) { _es.close(); _es = null; }
-          finish();
-        } else {
-          document.getElementById('progressLabel').textContent = 'Slow query…';
-          document.getElementById('authBanner').style.display = 'block';
-          document.getElementById('authMsg').textContent =
-            `Still running after ${fmtElapsed(s * 1000)} — Grafana may be slow or auth is needed.`;
-          resetWatchdog();
-        }
-      }, WARN_AFTER * 1000);
+        document.getElementById('progressLabel').textContent = 'Stalled';
+        document.getElementById('progressBar').style.background = '#ef4444';
+        document.getElementById('featureRows').innerHTML +=
+          `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">
+            No activity for 60s after ${fmtElapsed(s * 1000)} total — bridge or Grafana may be down. Press Stop and try again.
+          </div>`;
+        if (_es) { _es.close(); _es = null; }
+        finish();
+      }, STALL_AFTER * 1000);
     }
 
     const finish = (showPcapBtn) => {
@@ -538,6 +531,10 @@
         document.getElementById('authBanner').style.display = 'none';
         resetWatchdog();
       }
+      else if (msg.type === 'heartbeat') {
+        // Claude is alive, Grafana is just slow — reset stall timer silently
+        if (!authInProgress) resetWatchdog();
+      }
       else if (msg.type === 'progress') {
         if (!authInProgress) resetWatchdog();
         rows[msg.key] = { state: msg.state, detail: msg.detail };
@@ -560,12 +557,8 @@
     };
 
     _es.onerror = () => {
-      if (_es) {
-        document.getElementById('featureRows').innerHTML +=
-          '<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">Connection lost.</div>';
-        _es.close(); _es = null;
-        finish(false);
-      }
+      // EventSource auto-reconnects on transient errors — only treat as fatal if Claude is done.
+      // The stall watchdog will fire after 60s if it truly dies.
     };
   }
 
