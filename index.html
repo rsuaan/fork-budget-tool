@@ -565,6 +565,16 @@
               ? `Querying ${i + 1} / ${sids.length}…`
               : 'Querying…';
           }
+          else if (msg.type === 'warming_up') {
+            pauseWatchdog();
+            document.getElementById('progressLabel').textContent = 'Warming up…';
+          }
+          else if (msg.type === 'dispatched') {
+            resetWatchdog();
+            document.getElementById('progressLabel').textContent = sids.length > 1
+              ? `Querying ${i + 1} / ${sids.length}…`
+              : 'Querying…';
+          }
           else if (msg.type === 'auth') {
             authInProgress = true;
             pauseWatchdog();
@@ -614,8 +624,13 @@
   }
 
   function runPcapAnalysis() {
-    const sid = document.getElementById('callSid').value.trim();
-    if (!/^CA[0-9a-f]{32}$/.test(sid)) return;
+    console.log('[pcap] runPcapAnalysis called');
+    const raw = document.getElementById('callSid').value.trim();
+    console.log('[pcap] raw input:', raw);
+    const sids = parseSids(raw);
+    console.log('[pcap] parsed sids:', sids);
+    const sid = sids[0];
+    if (!sid) { console.log('[pcap] no valid sid, returning'); return; }
 
     const btn = document.getElementById('pcapBtn');
     const statusEl = document.getElementById('pcapStatus');

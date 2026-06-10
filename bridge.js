@@ -43,10 +43,14 @@ function parseMarkers(text) {
 // OAuth happens once; subsequent calls reuse the live MCP connection.
 
 let daemonProc = null;
-let daemonReady = false;
+let daemonReady = false;      // true once init system message arrives
+let daemonIdle = false;       // true once warmup result arrives — safe to send real jobs
 let daemonFifoWriter = null;
-let daemonQueue = [];    // fns to call once daemon is ready
+let daemonQueue = [];         // fns waiting for daemon ready
+let idleQueue = [];           // fns waiting for daemon idle (post-warmup)
+let jobQueue = [];            // fns waiting for currentJob to be null
 let currentJob = null;
+let warmingUp = false;        // true while warmup query is in flight
 const jobs = new Map();
 
 function ensureFifo() {
@@ -82,6 +86,7 @@ function startDaemon() {
 
   // Send a cheap Grafana ping so the MCP OAuth flow completes during warmup,
   // not during the user's first real request.
+  warmingUp = true;
   const warmup = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'Use mcp__grafana__list_datasources to list datasources. Just output: READY' }] } });
   proc.stdin.write(warmup + '\n');
 
@@ -100,8 +105,9 @@ function startDaemon() {
       return;
     }
 
-    // During warmup there's no currentJob — still handle OAuth
-    if (!currentJob) {
+    // During warmup (no currentJob) — handle OAuth but don't route to any job
+    if (warmingUp) console.log('[bridge] warmup msg: type=%s subtype=%s currentJob=%s', msg.type, msg.subtype, currentJob?.sid || 'null');
+    if (warmingUp && !currentJob) {
       if (msg.type === 'assistant' && msg.message?.content) {
         for (const block of msg.message.content) {
           if (block.type === 'text' && block.text) {
@@ -113,6 +119,18 @@ function startDaemon() {
           }
         }
       }
+      // Warmup finished — flush idle queue
+      if (msg.type === 'result') {
+        warmingUp = false;
+        daemonIdle = true;
+        console.log('[bridge] Daemon warmed up and idle — Grafana auth complete');
+        const q = idleQueue.splice(0);
+        for (const fn of q) fn();
+      }
+      return;
+    }
+    if (!currentJob) {
+      console.log('[bridge] handleDaemonLine: msg.type=%s dropped — no currentJob', msg.type);
       return;
     }
     const job = currentJob;
@@ -142,10 +160,12 @@ function startDaemon() {
     }
 
     if (msg.type === 'result' && msg.subtype === 'success') {
+      console.log('[bridge] job %s result:success', job.sid);
       for (const ev of parseMarkers(msg.result || '')) broadcast(job, ev);
       finishJob(job);
     }
     if (msg.type === 'result' && msg.subtype === 'error') {
+      console.log('[bridge] job %s result:error', job.sid);
       broadcast(job, { type: 'error', message: msg.result || 'Claude returned an error' });
       finishJob(job);
     }
@@ -157,11 +177,15 @@ function startDaemon() {
   });
 
   proc.on('close', code => {
-    console.log(`[bridge] Daemon exited (${code}) — will restart on next request`);
-    daemonProc = null;
-    daemonReady = false;
-    daemonFifoWriter = null;
-    currentJob = null;
+    console.log(`[bridge] Daemon exited (${code})`);
+    if (daemonProc === proc) {
+      daemonProc = null;
+      daemonReady = false;
+      daemonFifoWriter = null;
+      warmingUp = false;
+      daemonIdle = false;
+      currentJob = null;
+    }
   });
 }
 
@@ -173,11 +197,15 @@ function sendToDaemon(prompt) {
   daemonFifoWriter.write(msg + '\n');
 }
 
-function ensureDaemon(cb) {
-  if (daemonProc && daemonReady) { cb(); return; }
-  if (daemonProc && !daemonReady) { daemonQueue.push(cb); return; }
+function ensureDaemonIdle(cb) {
+  // Wait for daemon ready AND warmup complete AND no active job
+  if (daemonProc && daemonIdle && !currentJob) { cb(); return; }
+  if (daemonProc && daemonIdle && currentJob) { jobQueue.push(cb); return; }
+  if (daemonProc && daemonReady && warmingUp) { idleQueue.push(cb); return; }
+  if (daemonProc && !daemonReady) { daemonQueue.push(() => ensureDaemonIdle(cb)); return; }
+  // No daemon yet — start one
   startDaemon();
-  daemonQueue.push(cb);
+  daemonQueue.push(() => ensureDaemonIdle(cb));
 }
 
 function finishJob(job) {
@@ -186,6 +214,9 @@ function finishJob(job) {
   for (const res of job.clients) { try { res.end(); } catch {} }
   if (currentJob === job) currentJob = null;
   jobs.delete(job.sid);
+  // Dispatch next queued job, if any
+  const next = jobQueue.shift();
+  if (next) next();
 }
 
 // ── Pcap: separate one-shot process (needs --plugin-dir) ─────────────────────
@@ -256,11 +287,22 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/stop') {
-    const sid = (url.searchParams.get('call_sid') || '').trim();
+    const sid = (url.searchParams.get('call_sid') || '').trim().toUpperCase();
     if (currentJob && currentJob.sid === sid) {
       clearInterval(currentJob.heartbeat);
       currentJob = null;
       jobs.delete(sid);
+      jobQueue = [];
+      // Kill daemon so orphaned query can't corrupt the next job
+      if (daemonProc) {
+        console.log('[bridge] Stop requested — killing daemon to drop in-flight query');
+        daemonProc.kill();
+        daemonProc = null;
+        daemonReady = false;
+        daemonIdle = false;
+        warmingUp = false;
+        daemonFifoWriter = null;
+      }
     }
     const pcapJob = jobs.get(sid + ':pcap');
     if (pcapJob?.child) pcapJob.child.kill();
@@ -269,8 +311,9 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const sid = (url.searchParams.get('call_sid') || '').trim();
-  if (!/^CA[0-9a-f]{32}$/.test(sid)) {
+  const sid = (url.searchParams.get('call_sid') || '').trim().toUpperCase();
+  if (!/^CA[0-9A-F]{32}$/.test(sid)) {
+    console.log('[bridge] 400 invalid sid: %s', sid);
     res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Invalid call_sid' }));
     return;
@@ -285,6 +328,7 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { ...CORS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
 
   if (url.pathname === '/analyse-pcap') {
+    console.log('[bridge] pcap request for sid %s', sid);
     let job = jobs.get(sid + ':pcap');
     if (job) { for (const ev of job.events) sse(res, ev); job.clients.push(res); }
     else { job = startPcapJob(sid); job.clients.push(res); sse(res, { type: 'connected' }); }
@@ -308,10 +352,19 @@ const server = http.createServer((req, res) => {
     heartbeat: setInterval(() => broadcast(job, { type: 'heartbeat' }), 8000),
   };
   jobs.set(sid, job);
-  currentJob = job;
   sse(res, { type: 'connected' });
 
-  ensureDaemon(() => sendToDaemon(`/fork-budget ${sid}`));
+  const alreadyIdle = daemonProc && daemonIdle && !currentJob;
+  if (!alreadyIdle) {
+    broadcast(job, { type: 'warming_up' });
+  }
+
+  ensureDaemonIdle(() => {
+    console.log('[bridge] dispatching job %s to daemon (currentJob was %s)', sid, currentJob?.sid || 'null');
+    currentJob = job;
+    broadcast(job, { type: 'dispatched' });
+    sendToDaemon(`/fork-budget ${sid}`);
+  });
 
   req.on('close', () => { job.clients = job.clients.filter(c => c !== res); });
 });
@@ -319,5 +372,5 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Fork Budget bridge running on http://127.0.0.1:${PORT}`);
   // Pre-warm daemon on startup
-  ensureDaemon(() => console.log('[bridge] Daemon pre-warmed and ready'));
+  ensureDaemonIdle(() => console.log('[bridge] Daemon pre-warmed and idle'));
 });
