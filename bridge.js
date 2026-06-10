@@ -10,8 +10,12 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
+// Registry: sid -> { child, events[], clients[] }
+// Claude runs independently of SSE connections so OAuth callback server stays alive.
+const jobs = new Map();
+
 function sse(res, obj) {
-  res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {}
 }
 
 function parseMarkers(text) {
@@ -29,8 +33,14 @@ function parseMarkers(text) {
   return events;
 }
 
-function runClaude(res, prompt) {
-  sse(res, { type: 'connected' });
+function broadcast(job, obj) {
+  job.events.push(obj);
+  for (const res of job.clients) sse(res, obj);
+}
+
+function startJob(sid, prompt) {
+  const job = { child: null, events: [], clients: [] };
+  jobs.set(sid, job);
 
   const child = spawn(CLAUDE_BIN, [
     '--print',
@@ -44,6 +54,8 @@ function runClaude(res, prompt) {
     cwd: '/Users/rsuaan',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+
+  job.child = child;
 
   let lineBuf = '';
   let oauthOpened = false;
@@ -60,40 +72,35 @@ function runClaude(res, prompt) {
         if (block.type === 'text' && block.text) {
           fullText += block.text;
 
-          // Detect OAuth URL — open browser and pause watchdog
           if (!oauthOpened) {
             const oauthMatch = fullText.match(/https:\/\/claude-mcp-grafana[^\s)>"'\n]+/);
             if (oauthMatch) {
               oauthOpened = true;
               authPending = true;
-              sse(res, { type: 'auth', message: 'Grafana authentication required — opening browser…' });
+              broadcast(job, { type: 'auth', message: 'Grafana authentication required — opening browser…' });
               exec(`open "${oauthMatch[0]}"`, () => {});
             }
           }
 
-          const markers = parseMarkers(block.text);
-          for (const ev of markers) {
-            // First progress event after auth = auth completed
+          for (const ev of parseMarkers(block.text)) {
             if (authPending && ev.type === 'progress') {
               authPending = false;
-              sse(res, { type: 'auth_complete' });
+              broadcast(job, { type: 'auth_complete' });
             }
-            sse(res, ev);
+            broadcast(job, ev);
           }
         }
       }
     }
 
     if (msg.type === 'result' && msg.subtype === 'success') {
-      for (const ev of parseMarkers(msg.result || '')) {
-        sse(res, ev);
-      }
-      sse(res, { type: 'done' });
+      for (const ev of parseMarkers(msg.result || '')) broadcast(job, ev);
+      broadcast(job, { type: 'done' });
     }
 
     if (msg.type === 'result' && msg.subtype === 'error') {
-      sse(res, { type: 'error', message: msg.result || 'Claude returned an error' });
-      sse(res, { type: 'done' });
+      broadcast(job, { type: 'error', message: msg.result || 'Claude returned an error' });
+      broadcast(job, { type: 'done' });
     }
   }
 
@@ -105,16 +112,17 @@ function runClaude(res, prompt) {
   });
 
   child.stderr.on('data', chunk => {
-    console.error('[bridge stderr]', chunk.toString());
+    console.error('[bridge stderr]', chunk.toString().trim());
   });
 
   child.on('close', () => {
     if (lineBuf.trim()) handleLine(lineBuf);
-    sse(res, { type: 'done' });
-    res.end();
+    broadcast(job, { type: 'done' });
+    for (const res of job.clients) { try { res.end(); } catch {} }
+    jobs.delete(sid);
   });
 
-  return child;
+  return job;
 }
 
 const server = http.createServer((req, res) => {
@@ -127,6 +135,19 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/ping') {
+    res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // Explicit stop — called by browser Stop button
+  if (url.pathname === '/stop') {
+    const sid = (url.searchParams.get('call_sid') || '').trim();
+    const job = jobs.get(sid);
+    if (job) {
+      job.child.kill();
+      jobs.delete(sid);
+    }
     res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));
     return;
@@ -152,12 +173,25 @@ const server = http.createServer((req, res) => {
     'Connection': 'keep-alive',
   });
 
-  const prompt = url.pathname === '/analyse-pcap'
-    ? `/media-analysis ${sid}`
-    : `/fork-budget ${sid}`;
+  // Reuse existing job (OAuth reconnect) or start new one
+  let job = jobs.get(sid);
+  if (job) {
+    // Replay buffered events so the reconnected client catches up
+    for (const ev of job.events) sse(res, ev);
+    job.clients.push(res);
+  } else {
+    const prompt = url.pathname === '/analyse-pcap'
+      ? `/media-analysis ${sid}`
+      : `/fork-budget ${sid}`;
+    job = startJob(sid, prompt);
+    job.clients.push(res);
+    sse(res, { type: 'connected' });
+  }
 
-  const child = runClaude(res, prompt);
-  req.on('close', () => child.kill());
+  // Remove client on disconnect — but do NOT kill Claude
+  req.on('close', () => {
+    if (job) job.clients = job.clients.filter(c => c !== res);
+  });
 });
 
 server.listen(PORT, '127.0.0.1', () => {
