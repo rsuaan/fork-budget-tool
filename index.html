@@ -457,10 +457,17 @@
   }
 
   async function analyseCall() {
-    const sids = parseSids(document.getElementById('callSid').value);
+    const raw = document.getElementById('callSid').value;
+    const sids = parseSids(raw);
     if (!sids.length) {
+      // Find the invalid token to show a helpful message
+      const tokens = raw.split(/[\s,]+|(?:\bor\b)/i).map(s => s.trim()).filter(Boolean);
+      const bad = tokens.find(t => !/^CA[0-9A-F]{32}$/i.test(t));
+      const hint = bad
+        ? `"${bad}" is not valid — needs CA + exactly 32 hex chars (got ${bad.length - 2} hex chars)`
+        : 'Enter a valid Call SID (CA + 32 hex chars)';
       document.getElementById('featureRows').style.display = 'flex';
-      document.getElementById('featureRows').innerHTML = '<span style="color:#ef4444;font-size:0.82rem">Enter a valid Call SID (CA + 32 hex chars).</span>';
+      document.getElementById('featureRows').innerHTML = `<span style="color:#ef4444;font-size:0.82rem">${hint}</span>`;
       return;
     }
 
