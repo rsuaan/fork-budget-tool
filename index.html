@@ -112,6 +112,7 @@
         Run Media Path Analysis
       </button>
       <div id="pcapStatus" style="margin-top:0.6rem;font-size:0.82rem"></div>
+      <div id="pcapOutput" style="display:none;margin-top:0.75rem;padding:0.75rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:0.82rem;line-height:1.6;white-space:pre-wrap;font-family:monospace;color:#1f2937;max-height:500px;overflow-y:auto"></div>
     </div>
   </div>
 
@@ -593,6 +594,11 @@
       if (el) el.textContent = fmtElapsed(Date.now() - pcapStart);
     }, 1000);
 
+    const outputEl = document.getElementById('pcapOutput');
+    outputEl.style.display = 'none';
+    outputEl.textContent = '';
+    let pcapText = '';
+
     const es = new EventSource(`${BRIDGE}/analyse-pcap?call_sid=${encodeURIComponent(sid)}`);
 
     es.onmessage = e => {
@@ -602,6 +608,14 @@
       }
       else if (msg.type === 'auth') {
         statusEl.innerHTML = `<span style="color:#713f12">🔐 ${msg.message}</span>`;
+      }
+      else if (msg.type === 'heartbeat') { /* keep-alive, ignore */ }
+      else if (msg.type === 'text') {
+        // Accumulate and display the narrative output from the analysis
+        pcapText += msg.text;
+        outputEl.textContent = pcapText;
+        outputEl.style.display = 'block';
+        outputEl.scrollTop = outputEl.scrollHeight;
       }
       else if (msg.type === 'progress') {
         const icons = { querying: '⟳', done: '✓', none: '–', error: '✕' };
@@ -615,9 +629,7 @@
         btn.style.opacity = '1';
         btn.style.cursor = 'pointer';
         btn.textContent = 'Run Again';
-        if (!statusEl.innerHTML.includes('✓') && !statusEl.innerHTML.includes('–')) {
-          statusEl.innerHTML = `<span style="color:#10b981">✓ Complete — ${fmtElapsed(Date.now() - pcapStart)}</span>`;
-        }
+        statusEl.innerHTML = `<span style="color:#10b981">✓ Complete — ${fmtElapsed(Date.now() - pcapStart)}</span>`;
       }
       else if (msg.type === 'error') {
         clearInterval(pcapTimer);

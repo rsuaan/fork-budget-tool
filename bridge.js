@@ -218,6 +218,8 @@ function startPcapJob(sid) {
             if (m) { job.oauthOpened = true; broadcast(job, { type: 'auth', message: 'Auth required…' }); exec(`open "${m[0]}"`, () => {}); }
           }
           for (const ev of parseMarkers(block.text)) broadcast(job, ev);
+          // Emit full text so the browser can render the analysis narrative
+          broadcast(job, { type: 'text', text: block.text });
         }
       }
       if (msg.type === 'result') {
