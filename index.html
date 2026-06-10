@@ -85,7 +85,7 @@
       <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6b7280;margin-bottom:0.3rem">
         <span id="progressLabel">Querying…</span>
         <span style="display:flex;gap:0.75rem">
-          <span id="progressCount">0 / 5</span>
+          <span id="progressCount">0 / 4</span>
           <span id="progressElapsed" style="color:#9ca3af">0s</span>
         </span>
       </div>
@@ -353,7 +353,6 @@
     { key: 'transcription', label: 'Real-Time Transcription' },
     { key: 'siprec',        label: 'SIPREC' },
     { key: 'amd',           label: 'AMD' },
-    { key: 'pcap',          label: 'Media Path (pcap)' },
   ];
 
   function updateSid() {
@@ -440,7 +439,7 @@
     document.getElementById('progressWrap').style.display = 'block';
     document.getElementById('progressBar').style.width = '0%';
     document.getElementById('progressBar').style.background = '#6366f1';
-    document.getElementById('progressCount').textContent = '0 / 5';
+    document.getElementById('progressCount').textContent = '0 / 4';
     document.getElementById('progressLabel').textContent = 'Connecting…';
     document.getElementById('progressElapsed').textContent = '0s';
     document.getElementById('authBanner').style.display = 'none';
