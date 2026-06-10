@@ -64,15 +64,21 @@
   <input type="text" id="callSid" placeholder="CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" oninput="updateSid()" />
 
   <div style="margin-top:1rem;padding:1rem;background:#f8f7ff;border:1px solid #e0e7ff;border-radius:8px">
-    <div style="font-size:0.85rem;font-weight:600;color:#4338ca;margin-bottom:0.4rem">⚡ Auto-detect features via Claude Code</div>
+    <div style="font-size:0.85rem;font-weight:600;color:#4338ca;margin-bottom:0.4rem">⚡ Auto-detect features</div>
     <div style="font-size:0.78rem;color:#6b7280;margin-bottom:0.75rem;line-height:1.6">
-      Run this command in Claude Code — it queries Grafana + pcap analysis and opens this tool with results pre-filled:
+      Queries Grafana OTEL logs and runs pcap analysis via Claude — auto-fills the form below.
     </div>
-    <div style="display:flex;gap:0.5rem;align-items:center">
-      <code id="claudeCmd" style="flex:1;background:#1e1e2e;color:#cdd6f4;padding:0.45rem 0.75rem;border-radius:6px;font-size:0.82rem;display:block;overflow-x:auto;white-space:nowrap">/fork-budget</code>
-      <button onclick="copyClaudeCmd()" style="background:#6366f1;color:#fff;border:none;padding:0.45rem 0.9rem;border-radius:5px;font-size:0.82rem;font-weight:600;cursor:pointer;white-space:nowrap">Copy</button>
+    <div style="display:flex;gap:0.6rem;align-items:center">
+      <button onclick="analyseCall()" id="analyseBtn"
+        style="background:#6366f1;color:#fff;border:none;padding:0.5rem 1.1rem;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer">
+        Analyse
+      </button>
+      <button onclick="stopAnalysis()" id="stopBtn"
+        style="display:none;background:#fee2e2;color:#991b1b;border:none;padding:0.5rem 1rem;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer">
+        ✕ Stop
+      </button>
     </div>
-    <div id="claudeCmdMsg" style="margin-top:0.4rem;font-size:0.75rem;color:#10b981;display:none">Copied!</div>
+    <div id="analyseStatus" style="margin-top:0.75rem;font-size:0.82rem;min-height:1em"></div>
   </div>
 
   <div id="mediaAnalysisRow" style="display:none"></div>
@@ -317,32 +323,90 @@
     el.style.display = el.style.display === 'none' ? 'block' : 'none';
   }
 
+  const BRIDGE = 'http://127.0.0.1:47821';
+  let _es = null;
+
   function updateSid() {
     const sid = document.getElementById('callSid').value.trim();
     document.getElementById('refSidLine').textContent = sid ? 'Call SID: ' + sid : '';
-    const valid = /^CA[0-9a-f]{32}$/.test(sid);
-    document.getElementById('mediaAnalysisCard').style.display = valid ? 'block' : 'none';
-    const cmd = document.getElementById('claudeCmd');
-    if (cmd) cmd.textContent = valid ? `/fork-budget ${sid}` : '/fork-budget';
+    document.getElementById('mediaAnalysisCard').style.display =
+      /^CA[0-9a-f]{32}$/.test(sid) ? 'block' : 'none';
   }
 
-  function copyClaudeCmd() {
-    const text = document.getElementById('claudeCmd').textContent;
-    navigator.clipboard.writeText(text).then(() => {
-      const msg = document.getElementById('claudeCmdMsg');
-      msg.style.display = 'block';
-      setTimeout(() => { msg.style.display = 'none'; }, 2000);
-    });
+  function stopAnalysis() {
+    if (_es) { _es.close(); _es = null; }
+    document.getElementById('analyseBtn').disabled = false;
+    document.getElementById('stopBtn').style.display = 'none';
   }
 
-  function copyCmd(id) {
-    const text = document.getElementById(id).textContent;
-    const msgId = id === 'mediaCmd1' ? 'copyMsg1' : 'copyMsg2';
-    navigator.clipboard.writeText(text).then(() => {
-      const msg = document.getElementById(msgId);
-      msg.style.display = 'inline';
-      setTimeout(() => { msg.style.display = 'none'; }, 2000);
-    });
+  function applyResults(text) {
+    // Parse URL params Claude embeds in the pre-filled link and apply them
+    const match = text.match(/\?sid=[^\s)>"]+/);
+    if (!match) return;
+    const p = new URLSearchParams(match[0].slice(1));
+    if (p.get('sid')) document.getElementById('callSid').value = p.get('sid');
+    if (p.has('media'))         document.getElementById('mediaStreams').value  = p.get('media');
+    if (p.has('siprec'))        document.getElementById('siprec').value        = p.get('siprec');
+    if (p.has('transcription')) document.getElementById('transcription').value = p.get('transcription');
+    if (p.has('amd'))           document.getElementById('amd').value           = p.get('amd');
+    recalc();
+    updateDisplays();
+    updateSid();
+  }
+
+  async function analyseCall() {
+    const sid = document.getElementById('callSid').value.trim();
+    const statusEl = document.getElementById('analyseStatus');
+
+    if (!/^CA[0-9a-f]{32}$/.test(sid)) {
+      statusEl.innerHTML = '<span style="color:#ef4444">Enter a valid Call SID (CA + 32 hex chars).</span>';
+      return;
+    }
+
+    document.getElementById('analyseBtn').disabled = true;
+    document.getElementById('stopBtn').style.display = 'inline-block';
+    statusEl.innerHTML = '<span style="color:#6366f1">Connecting to Claude…</span>';
+
+    // Check bridge is up
+    try {
+      await fetch(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`, { method: 'GET', signal: AbortSignal.timeout(2000) });
+    } catch {
+      statusEl.innerHTML = '<span style="color:#ef4444">Bridge not running. Start it: <code>npm run bridge</code> in the fork-budget-tool folder, or check that the launchd daemon is loaded.</span>';
+      document.getElementById('analyseBtn').disabled = false;
+      document.getElementById('stopBtn').style.display = 'none';
+      return;
+    }
+
+    let output = '';
+    statusEl.innerHTML = '<pre style="background:#1e1e2e;color:#cdd6f4;padding:0.75rem;border-radius:7px;font-size:0.78rem;line-height:1.6;overflow-x:auto;white-space:pre-wrap;max-height:400px;overflow-y:auto"></pre>';
+    const pre = statusEl.querySelector('pre');
+
+    _es = new EventSource(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`);
+
+    _es.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      if (msg.text) {
+        output += msg.text;
+        pre.textContent = output;
+        pre.scrollTop = pre.scrollHeight;
+      }
+      if (msg.done) {
+        _es.close(); _es = null;
+        document.getElementById('analyseBtn').disabled = false;
+        document.getElementById('stopBtn').style.display = 'none';
+        applyResults(output);
+      }
+      if (msg.error) {
+        pre.textContent += '\n[stderr] ' + msg.error;
+      }
+    };
+
+    _es.onerror = () => {
+      statusEl.innerHTML += '<br><span style="color:#ef4444">Connection to bridge lost.</span>';
+      document.getElementById('analyseBtn').disabled = false;
+      document.getElementById('stopBtn').style.display = 'none';
+      _es = null;
+    };
   }
 
   // Pre-fill from URL params: ?sid=CA...&media=2&siprec=0&transcription=2&amd=1
