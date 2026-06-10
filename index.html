@@ -101,6 +101,18 @@
 
     <!-- Per-feature rows -->
     <div id="featureRows" style="display:none;margin-top:0.75rem;display:none;flex-direction:column;gap:0.3rem"></div>
+
+    <!-- Media path analysis button — shown after OTEL queries complete -->
+    <div id="pcapBtnWrap" style="display:none;margin-top:0.85rem;padding-top:0.75rem;border-top:1px solid #e0e7ff">
+      <div style="font-size:0.78rem;color:#6b7280;margin-bottom:0.5rem">
+        Want deeper media path analysis? Runs pcap pipeline via <code>owl</code> + <code>tshark</code> — takes 30–90s.
+      </div>
+      <button onclick="runPcapAnalysis()" id="pcapBtn"
+        style="background:#f0fdf4;color:#065f46;border:1px solid #bbf7d0;padding:0.45rem 1rem;border-radius:6px;font-size:0.82rem;font-weight:600;cursor:pointer">
+        Run Media Path Analysis
+      </button>
+      <div id="pcapStatus" style="margin-top:0.6rem;font-size:0.82rem"></div>
+    </div>
   </div>
 
   <div id="mediaAnalysisRow" style="display:none"></div>
@@ -446,16 +458,31 @@
     renderFeatureRows(rows);
 
     const startTime = Date.now();
+    function fmtElapsed(ms) {
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return s + 's';
+      const m = Math.floor(s / 60), rs = s % 60;
+      if (m < 60) return m + 'm ' + rs + 's';
+      const h = Math.floor(m / 60), rm = m % 60;
+      return h + 'h ' + rm + 'm';
+    }
+
     const elapsedTimer = setInterval(() => {
-      const s = Math.floor((Date.now() - startTime) / 1000);
-      document.getElementById('progressElapsed').textContent = s + 's';
+      document.getElementById('progressElapsed').textContent = fmtElapsed(Date.now() - startTime);
     }, 1000);
 
     let watchdog = null;
+    let authInProgress = false;
     const WARN_AFTER = 30;
-    const ABORT_AFTER = 90;
+    const ABORT_AFTER = 120;
+
+    function pauseWatchdog() {
+      clearTimeout(watchdog);
+      watchdog = null;
+    }
 
     function resetWatchdog() {
+      if (authInProgress) return; // suspend during OAuth
       clearTimeout(watchdog);
       watchdog = setTimeout(() => {
         const s = Math.floor((Date.now() - startTime) / 1000);
@@ -464,44 +491,53 @@
           document.getElementById('progressBar').style.background = '#ef4444';
           document.getElementById('featureRows').innerHTML +=
             `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">
-              No response from Claude for ${s}s — query may have stalled. Try pressing Stop and re-running.
+              No response from Claude for ${fmtElapsed(s * 1000)} — query may have stalled. Press Stop and try again.
             </div>`;
           if (_es) { _es.close(); _es = null; }
           finish();
         } else {
-          document.getElementById('progressLabel').textContent = `Slow query… (${s}s)`;
+          document.getElementById('progressLabel').textContent = 'Slow query…';
           document.getElementById('authBanner').style.display = 'block';
-          document.getElementById('authMsg').textContent = `Still running — Claude is taking longer than usual (${s}s). This can happen on large call sets or if Grafana auth is needed.`;
+          document.getElementById('authMsg').textContent =
+            `Still running after ${fmtElapsed(s * 1000)} — Grafana may be slow or auth is needed.`;
           resetWatchdog();
         }
       }, WARN_AFTER * 1000);
     }
 
-    const finish = () => {
+    const finish = (showPcapBtn) => {
       clearInterval(elapsedTimer);
       clearTimeout(watchdog);
       setAnalysing(false);
+      if (showPcapBtn) {
+        document.getElementById('pcapBtnWrap').style.display = 'block';
+      }
     };
 
     _es = new EventSource(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`);
     resetWatchdog();
 
     _es.onmessage = e => {
-      resetWatchdog();
       const msg = JSON.parse(e.data);
 
       if (msg.type === 'connected') {
+        resetWatchdog();
         document.getElementById('progressLabel').textContent = 'Querying…';
       }
       else if (msg.type === 'auth') {
+        authInProgress = true;
+        pauseWatchdog();
         document.getElementById('authBanner').style.display = 'block';
         document.getElementById('authMsg').textContent = msg.message;
       }
+      else if (msg.type === 'auth_complete') {
+        authInProgress = false;
+        document.getElementById('authBanner').style.display = 'none';
+        resetWatchdog();
+      }
       else if (msg.type === 'progress') {
+        if (!authInProgress) resetWatchdog();
         rows[msg.key] = { state: msg.state, detail: msg.detail };
-        if (msg.state === 'done' || msg.state === 'none') {
-          document.getElementById('authBanner').style.display = 'none';
-        }
         renderFeatureRows(rows);
         updateProgress(rows);
       }
@@ -510,21 +546,83 @@
       }
       else if (msg.type === 'done') {
         _es.close(); _es = null;
-        finish();
+        finish(true);
       }
       else if (msg.type === 'error') {
-        document.getElementById('featureRows').innerHTML += `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">${msg.message}</div>`;
+        document.getElementById('featureRows').innerHTML +=
+          `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">${msg.message}</div>`;
         _es.close(); _es = null;
-        finish();
+        finish(false);
       }
     };
 
     _es.onerror = () => {
       if (_es) {
-        document.getElementById('featureRows').innerHTML += '<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">Connection lost.</div>';
+        document.getElementById('featureRows').innerHTML +=
+          '<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">Connection lost.</div>';
         _es.close(); _es = null;
-        finish();
+        finish(false);
       }
+    };
+  }
+
+  function runPcapAnalysis() {
+    const sid = document.getElementById('callSid').value.trim();
+    if (!/^CA[0-9a-f]{32}$/.test(sid)) return;
+
+    const btn = document.getElementById('pcapBtn');
+    const statusEl = document.getElementById('pcapStatus');
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+    btn.style.cursor = 'not-allowed';
+    btn.textContent = 'Running…';
+    statusEl.innerHTML = '<span style="color:#6366f1">Starting pcap analysis…</span>';
+
+    const pcapStart = Date.now();
+    const pcapTimer = setInterval(() => {
+      const el = document.getElementById('pcapElapsed');
+      if (el) el.textContent = fmtElapsed(Date.now() - pcapStart);
+    }, 1000);
+
+    const es = new EventSource(`${BRIDGE}/analyse-pcap?call_sid=${encodeURIComponent(sid)}`);
+
+    es.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'connected') {
+        statusEl.innerHTML = '<span style="color:#6366f1">⟳ Running pcap pipeline… <span id="pcapElapsed">0s</span></span>';
+      }
+      else if (msg.type === 'auth') {
+        statusEl.innerHTML = `<span style="color:#713f12">🔐 ${msg.message}</span>`;
+      }
+      else if (msg.type === 'progress') {
+        const icons = { querying: '⟳', done: '✓', none: '–', error: '✕' };
+        const colors = { querying: '#6366f1', done: '#10b981', none: '#9ca3af', error: '#ef4444' };
+        statusEl.innerHTML = `<span style="color:${colors[msg.state]}">${icons[msg.state]} ${msg.detail || msg.state}</span> <span id="pcapElapsed" style="color:#9ca3af">${fmtElapsed(Date.now() - pcapStart)}</span>`;
+      }
+      else if (msg.type === 'done') {
+        clearInterval(pcapTimer);
+        es.close();
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.style.cursor = 'pointer';
+        btn.textContent = 'Run Again';
+        if (!statusEl.innerHTML.includes('✓') && !statusEl.innerHTML.includes('–')) {
+          statusEl.innerHTML = `<span style="color:#10b981">✓ Complete — ${fmtElapsed(Date.now() - pcapStart)}</span>`;
+        }
+      }
+      else if (msg.type === 'error') {
+        clearInterval(pcapTimer);
+        es.close();
+        btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer';
+        statusEl.innerHTML = `<span style="color:#ef4444">Error: ${msg.message}</span>`;
+      }
+    };
+
+    es.onerror = () => {
+      clearInterval(pcapTimer);
+      es.close();
+      btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer';
+      statusEl.innerHTML = '<span style="color:#ef4444">Connection lost.</span>';
     };
   }
 
