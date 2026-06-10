@@ -452,14 +452,43 @@
       document.getElementById('progressElapsed').textContent = s + 's';
     }, 1000);
 
+    let watchdog = null;
+    const WARN_AFTER = 30;
+    const ABORT_AFTER = 90;
+
+    function resetWatchdog() {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        const s = Math.floor((Date.now() - startTime) / 1000);
+        if (s >= ABORT_AFTER) {
+          document.getElementById('progressLabel').textContent = 'Timed out';
+          document.getElementById('progressBar').style.background = '#ef4444';
+          document.getElementById('featureRows').innerHTML +=
+            `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">
+              No response from Claude for ${s}s — query may have stalled. Try pressing Stop and re-running.
+            </div>`;
+          if (_es) { _es.close(); _es = null; }
+          finish();
+        } else {
+          document.getElementById('progressLabel').textContent = `Slow query… (${s}s)`;
+          document.getElementById('authBanner').style.display = 'block';
+          document.getElementById('authMsg').textContent = `Still running — Claude is taking longer than usual (${s}s). This can happen on large call sets or if Grafana auth is needed.`;
+          resetWatchdog();
+        }
+      }, WARN_AFTER * 1000);
+    }
+
     const finish = () => {
       clearInterval(elapsedTimer);
+      clearTimeout(watchdog);
       setAnalysing(false);
     };
 
     _es = new EventSource(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`);
+    resetWatchdog();
 
     _es.onmessage = e => {
+      resetWatchdog();
       const msg = JSON.parse(e.data);
 
       if (msg.type === 'connected') {
