@@ -234,35 +234,7 @@
     document.getElementById('refSidLine').textContent = sid ? 'Call SID: ' + sid : '';
   }
 
-  const GRAFANA_URL = 'https://grafana.twilioinfra.com';
-  const DS_UID = 'dffjhhyy5wetcf';
-
-  async function runClickHouseQuery(sql) {
-    const body = {
-      queries: [{
-        datasource: { uid: DS_UID, type: 'grafana-clickhouse-datasource' },
-        rawSql: sql,
-        format: 'table',
-        refId: 'A'
-      }],
-      from: 'now-30d',
-      to: 'now'
-    };
-    const resp = await fetch(`${GRAFANA_URL}/api/ds/query?ds_type=grafana-clickhouse-datasource`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const json = await resp.json();
-    const frames = json?.results?.A?.frames;
-    if (!frames || !frames.length) return [];
-    const cols = frames[0].schema.fields.map(f => f.name);
-    const rows = frames[0].data.values;
-    if (!rows || !rows[0]) return [];
-    return rows[0].map((_, i) => Object.fromEntries(cols.map((c, ci) => [c, rows[ci][i]])));
-  }
+  const WORKER_URL = 'https://fork-budget.rsuaan.workers.dev';
 
   async function analyzeCall() {
     const sid = document.getElementById('callSid').value.trim();
@@ -274,44 +246,17 @@
       return;
     }
     btn.disabled = true;
-    btn.textContent = 'Analyzing…';
+    btn.textContent = 'Analysing…';
     statusEl.style.display = 'block';
-    statusEl.innerHTML = '<span style="color:#6b7280">Querying OTEL logs across all 4 services…</span>';
+    statusEl.innerHTML = '<span style="color:#6b7280">Checking active features on this call…</span>';
 
     try {
-      const [mediaRows, transcRows, siprecRows, amdRows] = await Promise.all([
-        runClickHouseQuery(`SELECT LogAttributes['session_id'] AS stream_sid, min(Timestamp) AS started
-FROM otel_twlo.otel_logs
-WHERE Timestamp >= now() - INTERVAL 30 DAY
-  AND ServiceName = 'voice-media-streamer'
-  AND LogAttributes['call_sid'] = '${sid}'
-  AND LogAttributes['session_id'] != ''
-GROUP BY stream_sid ORDER BY started`),
-
-        runClickHouseQuery(`SELECT LogAttributes['stream_id'] AS stream_sid,
-       extractAll(Body, 'channel=(inbound|outbound)') AS channels
-FROM otel_twlo.otel_logs
-WHERE Timestamp >= now() - INTERVAL 30 DAY
-  AND ServiceName = 'realtime-transcription-service'
-  AND LogAttributes['call_sid'] = '${sid}'
-  AND LogAttributes['stream_id'] != ''
-  AND Body LIKE '%State change%ESTABLISHED%'
-GROUP BY stream_sid, channels LIMIT 20`),
-
-        runClickHouseQuery(`SELECT LogAttributes['stream_id'] AS stream_sid, count() AS events
-FROM otel_twlo.otel_logs
-WHERE Timestamp >= now() - INTERVAL 30 DAY
-  AND ServiceName = 'voice-siprec-service'
-  AND LogAttributes['call_sid'] = '${sid}'
-  AND LogAttributes['stream_id'] != ''
-GROUP BY stream_sid ORDER BY events DESC LIMIT 10`),
-
-        runClickHouseQuery(`SELECT Body FROM otel_twlo.otel_logs
-WHERE Timestamp >= now() - INTERVAL 30 DAY
-  AND ServiceName = 'voice-amd-service'
-  AND Body LIKE '%X-Twilio-CallSid: ${sid}%'
-LIMIT 1`)
-      ]);
+      const resp = await fetch(`${WORKER_URL}?call_sid=${encodeURIComponent(sid)}`);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      const { mediaRows, transcRows, siprecRows, amdRows } = await resp.json();
 
       // Media Streams
       const msCount = mediaRows.length;
@@ -342,15 +287,14 @@ LIMIT 1`)
       if (amdRows.length > 0) found.push('AMD');
 
       statusEl.innerHTML = found.length
-        ? `<span style="color:#10b981;font-weight:600">✓ Auto-detected: ${found.join(', ')}. Section 2 updated.</span>`
-        : `<span style="color:#6b7280">No active features found in OTEL logs for this Call SID.</span>`;
+        ? `<span style="color:#10b981;font-weight:600">✓ Detected: ${found.join(', ')}. Fork budget updated.</span>`
+        : `<span style="color:#6b7280">No active features found for this Call SID in the last 30 days.</span>`;
 
     } catch (err) {
-      statusEl.innerHTML = `<span style="color:#ef4444;font-weight:600">Query failed: ${err.message}.</span>
-        <span style="color:#6b7280"> Make sure you are <a href="https://grafana.twilioinfra.com" target="_blank" style="color:#6366f1">logged into Grafana</a> in this browser tab first.</span>`;
+      statusEl.innerHTML = `<span style="color:#ef4444;font-weight:600">Analysis failed: ${err.message}</span>`;
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Analyze';
+      btn.textContent = 'Analyse';
     }
   }
 
