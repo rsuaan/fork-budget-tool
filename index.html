@@ -383,6 +383,18 @@
     document.getElementById('refSidLine').textContent = sid ? 'Call SID: ' + sid : '';
     document.getElementById('mediaAnalysisCard').style.display =
       /^CA[0-9a-f]{32}$/.test(sid) ? 'block' : 'none';
+    // Clear previous results when SID changes
+    document.getElementById('progressWrap').style.display = 'none';
+    document.getElementById('featureRows').style.display = 'none';
+    document.getElementById('featureRows').innerHTML = '';
+    document.getElementById('pcapBtnWrap').style.display = 'none';
+    document.getElementById('pcapOutput').style.display = 'none';
+    document.getElementById('pcapOutput').textContent = '';
+    document.getElementById('pcapStatus').innerHTML = '';
+    document.getElementById('authBanner').style.display = 'none';
+    ['mediaStreams','siprec','transcription','amd'].forEach(id => document.getElementById(id).value = '0');
+    recalc();
+    updateDisplays();
   }
 
   function setAnalysing(on) {
