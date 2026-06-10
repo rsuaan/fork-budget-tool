@@ -110,72 +110,113 @@
 <!-- Features -->
 <div class="card">
   <h2>2. Active Features on This Call</h2>
-  <p class="note" style="margin-bottom:1rem">Select what the customer reported was active on the call. Each feature consumes forks from the shared pool of <strong>4</strong>.</p>
+  <p class="note" style="margin-bottom:1rem">Auto-filled after clicking Analyse. You can override any value manually if needed.</p>
 
-  <div class="toggle-row">
-    <div>
-      <div class="toggle-label">Media Streams</div>
-      <div class="toggle-sub">both_tracks = 2 forks per stream &nbsp;·&nbsp; single track = 1 fork per stream</div>
+  <!-- hidden selects drive recalc() — not shown to user directly -->
+  <select id="mediaStreams" onchange="recalc()" style="display:none">
+    <option value="0">Not used</option>
+    <option value="1">1 stream — single track (1 fork)</option>
+    <option value="2">1 stream — both_tracks (2 forks)</option>
+    <option value="3">2 streams — single track each (2 forks)</option>
+    <option value="4">2 streams — both_tracks each (4 forks)</option>
+    <option value="5">2 streams — 1× both_tracks + 1× single (3 forks)</option>
+    <option value="custom">Custom…</option>
+  </select>
+  <select id="siprec" onchange="recalc()" style="display:none">
+    <option value="0">Not used</option>
+    <option value="1">Single track (1 fork)</option>
+    <option value="2">Default / both_tracks (2 forks)</option>
+  </select>
+  <select id="transcription" onchange="recalc()" style="display:none">
+    <option value="0">Not used</option>
+    <option value="1">Single track (1 fork)</option>
+    <option value="2">both_tracks / default (2 forks)</option>
+  </select>
+  <select id="amd" onchange="recalc()" style="display:none">
+    <option value="0">Not used / already completed</option>
+    <option value="1">Active during stream creation (1 fork)</option>
+  </select>
+  <div id="mediaCustomRow" style="display:none">
+    <input type="text" id="mediaCustomVal" oninput="recalc()" style="display:none" />
+  </div>
+
+  <div id="featuresDisplay">
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Media Streams</div>
+        <div class="toggle-sub">both_tracks = 2 forks · single track = 1 fork per stream</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.75rem">
+        <span id="mediaDisplay" style="font-size:0.85rem;color:#6b7280">Not detected</span>
+        <span class="toggle-cost" id="mediaCost">+0</span>
+        <a href="#" onclick="showOverride('media');return false;" style="font-size:0.75rem;color:#6366f1">Override</a>
+      </div>
     </div>
-    <div style="display:flex;align-items:center;gap:0.75rem">
-      <select id="mediaStreams" onchange="recalc()">
+    <div id="mediaOverride" style="display:none;padding:0.4rem 0 0.25rem 0">
+      <select onchange="document.getElementById('mediaStreams').value=this.value;recalc();updateDisplays();" style="font-size:0.82rem">
         <option value="0">Not used</option>
         <option value="1">1 stream — single track (1 fork)</option>
         <option value="2">1 stream — both_tracks (2 forks)</option>
         <option value="3">2 streams — single track each (2 forks)</option>
         <option value="4">2 streams — both_tracks each (4 forks)</option>
         <option value="5">2 streams — 1× both_tracks + 1× single (3 forks)</option>
-        <option value="custom">Custom…</option>
       </select>
-      <span class="toggle-cost" id="mediaCost">+0</span>
     </div>
-  </div>
-  <div id="mediaCustomRow" style="display:none;padding:0.5rem 0 0.25rem 0">
-    <label style="font-size:0.78rem">Total fork count for Media Streams</label>
-    <input type="text" id="mediaCustomVal" placeholder="e.g. 3" oninput="recalc()" style="width:100px" />
-  </div>
 
-  <div class="toggle-row">
-    <div>
-      <div class="toggle-label">SIPREC</div>
-      <div class="toggle-sub">Default (both_tracks) = 2 forks &nbsp;·&nbsp; single track = 1 fork</div>
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">SIPREC</div>
+        <div class="toggle-sub">Default (both_tracks) = 2 forks · single track = 1 fork</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.75rem">
+        <span id="siprecDisplay" style="font-size:0.85rem;color:#6b7280">Not detected</span>
+        <span class="toggle-cost" id="siprecCost">+0</span>
+        <a href="#" onclick="showOverride('siprec');return false;" style="font-size:0.75rem;color:#6366f1">Override</a>
+      </div>
     </div>
-    <div style="display:flex;align-items:center;gap:0.75rem">
-      <select id="siprec" onchange="recalc()">
+    <div id="siprecOverride" style="display:none;padding:0.4rem 0 0.25rem 0">
+      <select onchange="document.getElementById('siprec').value=this.value;recalc();updateDisplays();" style="font-size:0.82rem">
         <option value="0">Not used</option>
         <option value="1">Single track (1 fork)</option>
         <option value="2">Default / both_tracks (2 forks)</option>
       </select>
-      <span class="toggle-cost" id="siprecCost">+0</span>
     </div>
-  </div>
 
-  <div class="toggle-row">
-    <div>
-      <div class="toggle-label">Real-Time Transcription</div>
-      <div class="toggle-sub">both_tracks (default) = 2 forks &nbsp;·&nbsp; single track = 1 fork</div>
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Real-Time Transcription</div>
+        <div class="toggle-sub">both_tracks (default) = 2 forks · single track = 1 fork</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.75rem">
+        <span id="transcriptionDisplay" style="font-size:0.85rem;color:#6b7280">Not detected</span>
+        <span class="toggle-cost" id="transcriptionCost">+0</span>
+        <a href="#" onclick="showOverride('transcription');return false;" style="font-size:0.75rem;color:#6366f1">Override</a>
+      </div>
     </div>
-    <div style="display:flex;align-items:center;gap:0.75rem">
-      <select id="transcription" onchange="recalc()">
+    <div id="transcriptionOverride" style="display:none;padding:0.4rem 0 0.25rem 0">
+      <select onchange="document.getElementById('transcription').value=this.value;recalc();updateDisplays();" style="font-size:0.82rem">
         <option value="0">Not used</option>
         <option value="1">Single track (1 fork)</option>
         <option value="2">both_tracks / default (2 forks)</option>
       </select>
-      <span class="toggle-cost" id="transcriptionCost">+0</span>
     </div>
-  </div>
 
-  <div class="toggle-row">
-    <div>
-      <div class="toggle-label">Answering Machine Detection (AMD)</div>
-      <div class="toggle-sub">Consumes 1 fork <em>while actively analyzing</em>. Released once AMD completes.</div>
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Answering Machine Detection (AMD)</div>
+        <div class="toggle-sub">Consumes 1 fork while actively analyzing. Released once AMD completes.</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.75rem">
+        <span id="amdDisplay" style="font-size:0.85rem;color:#6b7280">Not detected</span>
+        <span class="toggle-cost" id="amdCost">+0</span>
+        <a href="#" onclick="showOverride('amd');return false;" style="font-size:0.75rem;color:#6366f1">Override</a>
+      </div>
     </div>
-    <div style="display:flex;align-items:center;gap:0.75rem">
-      <select id="amd" onchange="recalc()">
+    <div id="amdOverride" style="display:none;padding:0.4rem 0 0.25rem 0">
+      <select onchange="document.getElementById('amd').value=this.value;recalc();updateDisplays();" style="font-size:0.82rem">
         <option value="0">Not used / already completed</option>
         <option value="1">Active during stream creation (1 fork)</option>
       </select>
-      <span class="toggle-cost" id="amdCost">+0</span>
     </div>
   </div>
 </div>
@@ -260,6 +301,33 @@
   const MEDIA_MAP   = { '0':0,'1':1,'2':2,'3':2,'4':4,'5':3 };
   const MEDIA_LABEL = { '1':'1 stream, single track','2':'1 stream, both_tracks','3':'2 streams, single track each','4':'2 streams, both_tracks each','5':'2 streams (both_tracks + single track)' };
 
+  const MEDIA_LABEL = { '0':'Not detected','1':'1 stream, single track','2':'1 stream, both_tracks','3':'2 streams, single track each','4':'2 streams, both_tracks each','5':'2 streams (both_tracks + single)' };
+
+  function updateDisplays() {
+    const ms = document.getElementById('mediaStreams').value;
+    const sip = document.getElementById('siprec').value;
+    const trans = document.getElementById('transcription').value;
+    const amd = document.getElementById('amd').value;
+
+    const set = (id, val, labels) => {
+      const el = document.getElementById(id);
+      const detected = val !== '0';
+      el.textContent = labels[val] || 'Not detected';
+      el.style.color = detected ? '#059669' : '#6b7280';
+      el.style.fontWeight = detected ? '600' : '400';
+    };
+
+    set('mediaDisplay', ms, MEDIA_LABEL);
+    set('siprecDisplay', sip, {'0':'Not detected','1':'Single track','2':'both_tracks (default)'});
+    set('transcriptionDisplay', trans, {'0':'Not detected','1':'Single track','2':'both_tracks (default)'});
+    set('amdDisplay', amd, {'0':'Not detected','1':'Active during stream creation'});
+  }
+
+  function showOverride(feature) {
+    const el = document.getElementById(feature + 'Override');
+    el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  }
+
   function updateSid() {
     const sid = document.getElementById('callSid').value.trim();
     document.getElementById('refSidLine').textContent = sid ? 'Call SID: ' + sid : '';
@@ -315,7 +383,10 @@
 
     const spinFrames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
     let spinIdx = 0;
-    statusEl.innerHTML = `<span style="color:#6366f1;font-family:monospace" id="runningStatus">${spinFrames[0]} Querying all 4 services in parallel…</span>`;
+    statusEl.innerHTML = `<span style="color:#6366f1;font-family:monospace" id="runningStatus"></span>
+      <div style="font-size:0.75rem;color:#9ca3af;margin-top:0.35rem;line-height:1.7">
+        Querying: voice-media-streamer · realtime-transcription-service · voice-siprec-service · voice-amd-service
+      </div>`;
     const ticker = setInterval(() => {
       spinIdx = (spinIdx + 1) % spinFrames.length;
       const el = document.getElementById('runningStatus');
@@ -371,6 +442,7 @@
       if (amdRows.length > 0) found.push('AMD');
 
       clearInterval(statusEl._ticker);
+      updateDisplays();
       statusEl.innerHTML = found.length
         ? `<span style="color:#10b981;font-weight:600">✓ Detected: ${found.join(', ')}. Fork budget updated.</span>`
         : `<span style="color:#6b7280">No active features found for this Call SID in the last 30 days.</span>`;
@@ -472,9 +544,11 @@
     ['mediaStreams','siprec','transcription','amd'].forEach(id => document.getElementById(id).value = '0');
     document.getElementById('mediaCustomVal').value = '';
     recalc();
+    updateDisplays();
   }
 
   recalc();
+  updateDisplays();
   updateSessionIndicator();
 </script>
 </body>
