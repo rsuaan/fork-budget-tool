@@ -293,15 +293,14 @@
     </tbody>
   </table>
 
-  <div class="tip" style="margin-top:1rem">
-    <strong>Questions to ask the customer:</strong>
-    <ul style="margin:0.5rem 0 0 1.25rem;line-height:1.9">
-      <li>Are you using Media Streams? If yes — how many, and are they <code>both_tracks</code> or single track?</li>
-      <li>Are you using SIPREC? If yes — default config (both_tracks) or single track?</li>
-      <li>Are you using <code>&lt;Transcription&gt;</code>? If yes — which track mode?</li>
-      <li>Is AMD (<code>MachineDetection=Enable</code>) active on this call?</li>
-      <li>Are streams being created at the start of the call, or after AMD completes?</li>
-    </ul>
+  <div style="margin-top:1.25rem">
+    <label for="twimlInput" style="font-weight:600;margin-bottom:0.4rem;display:block">Parse TwiML to auto-fill features</label>
+    <p class="note" style="margin-bottom:0.6rem">Paste the customer's TwiML (or the verb response body). Track mode, stream count, AMD, and SIPREC are read directly — no need to ask.</p>
+    <textarea id="twimlInput" rows="6" style="width:100%;padding:0.55rem 0.75rem;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;font-family:monospace;resize:vertical;color:#1f2937" placeholder='<Response>&#10;  <Start><Stream url="wss://…" track="both_tracks"/></Start>&#10;  <Gather action="/handle" input="speech" speechModel="phone_call"/>&#10;</Response>'></textarea>
+    <div style="display:flex;align-items:center;gap:0.75rem;margin-top:0.5rem">
+      <button onclick="parseTwiML()" style="background:#6366f1;color:#fff;padding:0.45rem 1.1rem;font-size:0.85rem">Parse TwiML</button>
+      <span id="twimlResult" style="font-size:0.82rem;color:#6b7280"></span>
+    </div>
   </div>
 </div>
 
@@ -620,6 +619,87 @@
       btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer';
       statusEl.innerHTML = '<span style="color:#ef4444">Connection lost.</span>';
     };
+  }
+
+  function parseTwiML() {
+    const raw = document.getElementById('twimlInput').value.trim();
+    const out = document.getElementById('twimlResult');
+    if (!raw) { out.textContent = 'Paste TwiML first.'; return; }
+
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(raw, 'text/xml');
+      if (doc.querySelector('parsererror')) throw new Error('XML parse error');
+    } catch {
+      out.style.color = '#ef4444';
+      out.textContent = 'Could not parse — check XML is valid.';
+      return;
+    }
+
+    const changes = [];
+
+    // ── Media Streams ────────────────────────────────────────────
+    // <Start><Stream .../></Start>  or  <Stream .../>  directly
+    const streams = [...doc.querySelectorAll('Stream')];
+    if (streams.length > 0) {
+      // Count unique streams (dedupe by url attr to avoid counting same url twice)
+      const urls = new Set(streams.map(s => s.getAttribute('url') || s.getAttribute('name') || Math.random()));
+      const count = urls.size;
+      // Detect track mode per stream
+      const trackAttrs = streams.map(s => (s.getAttribute('track') || 'both_tracks').toLowerCase());
+      const allBoth   = trackAttrs.every(t => t === 'both_tracks' || t === 'both');
+      const allSingle = trackAttrs.every(t => t === 'inbound_track' || t === 'outbound_track' || t === 'inbound' || t === 'outbound');
+      let val;
+      if (count >= 2) {
+        val = (allSingle) ? '3' : (allBoth) ? '4' : '5'; // 2 single, 2 both, mixed
+      } else {
+        val = allSingle ? '1' : '2'; // 1 single or 1 both
+      }
+      document.getElementById('mediaStreams').value = val;
+      changes.push(`Media Streams → ${document.querySelector('#mediaStreams option[value="${val}"]').textContent}`);
+    }
+
+    // ── SIPREC ───────────────────────────────────────────────────
+    // <Siprec connectorName="…" track="…"/>
+    const siprecs = [...doc.querySelectorAll('Siprec')];
+    if (siprecs.length > 0) {
+      const track = (siprecs[0].getAttribute('track') || 'both_tracks').toLowerCase();
+      const val = (track === 'inbound_track' || track === 'outbound_track' || track === 'inbound' || track === 'outbound') ? '1' : '2';
+      document.getElementById('siprec').value = val;
+      changes.push(`SIPREC → ${document.querySelector('#siprec option[value="${val}"]').textContent}`);
+    }
+
+    // ── Transcription ────────────────────────────────────────────
+    // <Transcription …/>  inside <Start> or standalone
+    const transcriptions = [...doc.querySelectorAll('Transcription')];
+    if (transcriptions.length > 0) {
+      // track attr: both_tracks (default), inbound_track, outbound_track
+      const track = (transcriptions[0].getAttribute('track') || 'both_tracks').toLowerCase();
+      const val = (track === 'inbound_track' || track === 'outbound_track' || track === 'inbound' || track === 'outbound') ? '1' : '2';
+      document.getElementById('transcription').value = val;
+      changes.push(`Transcription → ${document.querySelector('#transcription option[value="${val}"]').textContent}`);
+    }
+
+    // ── AMD ───────────────────────────────────────────────────────
+    // MachineDetection="Enable" on <Dial> or verb, or <Gather machineDetection="Enable">
+    // Also check for AMD via <Record machineDetection> pattern
+    const hasMD = raw.match(/MachineDetection\s*=\s*["']Enable["']/i) ||
+                  doc.querySelector('[machinedetection]');
+    if (hasMD) {
+      document.getElementById('amd').value = '1';
+      changes.push('AMD → Active (1 fork)');
+    }
+
+    recalc();
+    updateDisplays();
+
+    if (changes.length === 0) {
+      out.style.color = '#9ca3af';
+      out.textContent = 'No fork-relevant verbs found (Stream, Siprec, Transcription, MachineDetection).';
+    } else {
+      out.style.color = '#10b981';
+      out.textContent = '✓ ' + changes.join(' · ');
+    }
   }
 
   // Pre-fill from URL params: ?sid=CA...&media=2&siprec=0&transcription=2&amd=1
