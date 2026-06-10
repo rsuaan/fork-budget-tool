@@ -67,11 +67,11 @@
   <div style="margin-top:1rem;padding:1rem;background:#f8f7ff;border:1px solid #e0e7ff;border-radius:8px">
     <div style="font-size:0.85rem;font-weight:600;color:#4338ca;margin-bottom:0.4rem">⚡ Auto-detect features</div>
     <div style="font-size:0.78rem;color:#6b7280;margin-bottom:0.75rem;line-height:1.6">
-      Queries Grafana OTEL logs and runs pcap analysis via Claude — auto-fills the form below.
+      Queries Grafana OTEL logs via Claude — auto-fills the form below.
     </div>
     <div style="display:flex;gap:0.6rem;align-items:center">
       <button onclick="analyseCall()" id="analyseBtn"
-        style="background:#6366f1;color:#fff;border:none;padding:0.5rem 1.1rem;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer">
+        style="background:#6366f1;color:#fff;border:none;padding:0.5rem 1.1rem;border-radius:6px;font-size:0.85rem;font-weight:600;cursor:pointer;transition:background 0.15s,opacity 0.15s">
         Analyse
       </button>
       <button onclick="stopAnalysis()" id="stopBtn"
@@ -79,7 +79,25 @@
         ✕ Stop
       </button>
     </div>
-    <div id="analyseStatus" style="margin-top:0.75rem;font-size:0.82rem;min-height:1em"></div>
+
+    <!-- Progress bar -->
+    <div id="progressWrap" style="display:none;margin-top:0.85rem">
+      <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#6b7280;margin-bottom:0.3rem">
+        <span id="progressLabel">Querying…</span>
+        <span id="progressCount">0 / 4</span>
+      </div>
+      <div style="height:6px;background:#e0e7ff;border-radius:999px;overflow:hidden">
+        <div id="progressBar" style="height:100%;background:#6366f1;border-radius:999px;width:0%;transition:width 0.4s"></div>
+      </div>
+    </div>
+
+    <!-- Auth banner -->
+    <div id="authBanner" style="display:none;margin-top:0.75rem;padding:0.6rem 0.8rem;background:#fef9c3;border:1px solid #fde047;border-radius:7px;font-size:0.82rem;color:#713f12">
+      🔐 <span id="authMsg"></span>
+    </div>
+
+    <!-- Per-feature rows -->
+    <div id="featureRows" style="display:none;margin-top:0.75rem;display:none;flex-direction:column;gap:0.3rem"></div>
   </div>
 
   <div id="mediaAnalysisRow" style="display:none"></div>
@@ -327,12 +345,12 @@
   const BRIDGE = 'http://127.0.0.1:47821';
   let _es = null;
 
-  const FEATURE_LABELS = {
-    media:          'Media Streams',
-    transcription:  'Real-Time Transcription',
-    siprec:         'SIPREC',
-    amd:            'AMD',
-  };
+  const FEATURES = [
+    { key: 'media',         label: 'Media Streams' },
+    { key: 'transcription', label: 'Real-Time Transcription' },
+    { key: 'siprec',        label: 'SIPREC' },
+    { key: 'amd',           label: 'AMD' },
+  ];
 
   function updateSid() {
     const sid = document.getElementById('callSid').value.trim();
@@ -341,10 +359,20 @@
       /^CA[0-9a-f]{32}$/.test(sid) ? 'block' : 'none';
   }
 
+  function setAnalysing(on) {
+    const btn = document.getElementById('analyseBtn');
+    btn.disabled = on;
+    btn.style.opacity = on ? '0.5' : '1';
+    btn.style.cursor = on ? 'not-allowed' : 'pointer';
+    document.getElementById('stopBtn').style.display = on ? 'inline-block' : 'none';
+  }
+
   function stopAnalysis() {
     if (_es) { _es.close(); _es = null; }
-    document.getElementById('analyseBtn').disabled = false;
-    document.getElementById('stopBtn').style.display = 'none';
+    setAnalysing(false);
+    document.getElementById('progressWrap').style.display = 'none';
+    document.getElementById('authBanner').style.display = 'none';
+    document.getElementById('featureRows').style.display = 'none';
   }
 
   function applyResults(params) {
@@ -357,65 +385,62 @@
     updateDisplays();
   }
 
-  function renderStatus(rows, authMsg) {
-    const statusEl = document.getElementById('analyseStatus');
-    let html = '';
+  function updateProgress(rows) {
+    const done = Object.values(rows).filter(r => r.state === 'done' || r.state === 'none' || r.state === 'error').length;
+    const total = FEATURES.length;
+    const pct = Math.round(done / total * 100);
+    document.getElementById('progressBar').style.width = pct + '%';
+    document.getElementById('progressCount').textContent = done + ' / ' + total;
+    document.getElementById('progressLabel').textContent = done === total ? 'Complete' : 'Querying…';
+    if (done === total) document.getElementById('progressBar').style.background = '#10b981';
+  }
 
-    if (authMsg) {
-      html += `<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;padding:0.6rem 0.8rem;background:#fef9c3;border:1px solid #fde047;border-radius:7px;font-size:0.82rem;color:#713f12">
-        <span style="font-size:1rem">🔐</span> ${authMsg}
-      </div>`;
-    }
-
-    html += '<div style="display:flex;flex-direction:column;gap:0.35rem">';
-    for (const [key, label] of Object.entries(FEATURE_LABELS)) {
-      const row = rows[key] || { state: 'pending' };
+  function renderFeatureRows(rows) {
+    const el = document.getElementById('featureRows');
+    el.style.display = 'flex';
+    el.innerHTML = FEATURES.map(f => {
+      const row = rows[f.key] || { state: 'pending' };
       let icon, color, detail;
-      if (row.state === 'pending')   { icon = '·';  color = '#9ca3af'; detail = ''; }
+      if      (row.state === 'pending')  { icon = '·'; color = '#9ca3af'; detail = ''; }
       else if (row.state === 'querying') { icon = '<span style="display:inline-block;animation:spin 1s linear infinite">⟳</span>'; color = '#6366f1'; detail = 'Querying…'; }
-      else if (row.state === 'done') { icon = '✓';  color = '#10b981'; detail = row.detail || 'Detected'; }
-      else if (row.state === 'none') { icon = '–';  color = '#9ca3af'; detail = 'Not found'; }
-      else                           { icon = '✕';  color = '#ef4444'; detail = row.detail || 'Error'; }
-
-      html += `<div style="display:flex;align-items:center;gap:0.6rem;padding:0.45rem 0.6rem;background:#f9fafb;border-radius:6px">
-        <span style="color:${color};font-weight:700;width:1rem;text-align:center;font-size:0.9rem">${icon}</span>
-        <span style="font-size:0.85rem;font-weight:500;flex:1">${label}</span>
+      else if (row.state === 'done')     { icon = '✓'; color = '#10b981'; detail = row.detail; }
+      else if (row.state === 'none')     { icon = '–'; color = '#9ca3af'; detail = 'Not found'; }
+      else                               { icon = '✕'; color = '#ef4444'; detail = row.detail || 'Error'; }
+      return `<div style="display:flex;align-items:center;gap:0.6rem;padding:0.45rem 0.6rem;background:#f9fafb;border-radius:6px">
+        <span style="color:${color};font-weight:700;width:1rem;text-align:center">${icon}</span>
+        <span style="font-size:0.85rem;font-weight:500;flex:1">${f.label}</span>
         <span style="font-size:0.78rem;color:${color}">${detail}</span>
       </div>`;
-    }
-    html += '</div>';
-    statusEl.innerHTML = html;
+    }).join('');
   }
 
   async function analyseCall() {
     const sid = document.getElementById('callSid').value.trim();
-    const statusEl = document.getElementById('analyseStatus');
-
     if (!/^CA[0-9a-f]{32}$/.test(sid)) {
-      statusEl.innerHTML = '<span style="color:#ef4444">Enter a valid Call SID (CA + 32 hex chars).</span>';
+      document.getElementById('featureRows').style.display = 'flex';
+      document.getElementById('featureRows').innerHTML = '<span style="color:#ef4444;font-size:0.82rem">Enter a valid Call SID (CA + 32 hex chars).</span>';
       return;
     }
-
-    document.getElementById('analyseBtn').disabled = true;
-    document.getElementById('stopBtn').style.display = 'inline-block';
-    statusEl.innerHTML = '<span style="color:#6366f1;font-size:0.82rem">Connecting…</span>';
 
     // Check bridge is up
     try {
       const ping = await fetch(`${BRIDGE}/ping`, { signal: AbortSignal.timeout(2000) });
       if (!ping.ok) throw new Error();
     } catch {
-      statusEl.innerHTML = '<span style="color:#ef4444;font-size:0.82rem">Bridge not reachable — daemon may have crashed. Check <code>/tmp/fork-budget-bridge.err</code>.</span>';
-      document.getElementById('analyseBtn').disabled = false;
-      document.getElementById('stopBtn').style.display = 'none';
+      document.getElementById('featureRows').style.display = 'flex';
+      document.getElementById('featureRows').innerHTML = '<span style="color:#ef4444;font-size:0.82rem">Bridge not reachable — daemon may have crashed. Check <code>/tmp/fork-budget-bridge.err</code>.</span>';
       return;
     }
 
+    setAnalysing(true);
     const rows = {};
-    let authMsg = null;
-
-    // Show all features as pending immediately
-    renderStatus(rows, null);
+    document.getElementById('progressWrap').style.display = 'block';
+    document.getElementById('progressBar').style.width = '0%';
+    document.getElementById('progressBar').style.background = '#6366f1';
+    document.getElementById('progressCount').textContent = '0 / 4';
+    document.getElementById('progressLabel').textContent = 'Querying…';
+    document.getElementById('authBanner').style.display = 'none';
+    renderFeatureRows(rows);
 
     _es = new EventSource(`${BRIDGE}/analyse?call_sid=${encodeURIComponent(sid)}`);
 
@@ -423,45 +448,37 @@
       const msg = JSON.parse(e.data);
 
       if (msg.type === 'auth') {
-        authMsg = msg.message;
-        renderStatus(rows, authMsg);
-      }
-      else if (msg.type === 'auth_waiting') {
-        authMsg = msg.message;
-        renderStatus(rows, authMsg);
-      }
-      else if (msg.type === 'auth_error') {
-        authMsg = `<span style="color:#ef4444">${msg.message}</span>`;
-        renderStatus(rows, authMsg);
+        document.getElementById('authBanner').style.display = 'block';
+        document.getElementById('authMsg').textContent = msg.message;
       }
       else if (msg.type === 'progress') {
-        if (msg.state === 'querying') {
-          rows[msg.key] = { state: 'querying' };
-        } else if (msg.state === 'done') {
-          rows[msg.key] = { state: msg.detail ? 'done' : 'none', detail: msg.detail };
-        } else if (msg.state === 'error') {
-          rows[msg.key] = { state: 'error', detail: msg.detail };
+        rows[msg.key] = { state: msg.state, detail: msg.detail };
+        if (msg.state === 'done' || msg.state === 'none') {
+          document.getElementById('authBanner').style.display = 'none';
         }
-        // Clear auth message once queries start succeeding
-        if (msg.state === 'done' && authMsg) authMsg = null;
-        renderStatus(rows, authMsg);
+        renderFeatureRows(rows);
+        updateProgress(rows);
       }
       else if (msg.type === 'result') {
         applyResults(msg.params);
       }
       else if (msg.type === 'done') {
         _es.close(); _es = null;
-        document.getElementById('analyseBtn').disabled = false;
-        document.getElementById('stopBtn').style.display = 'none';
-        renderStatus(rows, null);
+        setAnalysing(false);
+      }
+      else if (msg.type === 'error') {
+        document.getElementById('featureRows').innerHTML += `<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">${msg.message}</div>`;
+        _es.close(); _es = null;
+        setAnalysing(false);
       }
     };
 
     _es.onerror = () => {
-      statusEl.innerHTML += '<div style="color:#ef4444;font-size:0.82rem;margin-top:0.5rem">Connection to bridge lost.</div>';
-      document.getElementById('analyseBtn').disabled = false;
-      document.getElementById('stopBtn').style.display = 'none';
-      _es = null;
+      if (_es) {
+        document.getElementById('featureRows').innerHTML += '<div style="color:#ef4444;font-size:0.82rem;margin-top:0.4rem">Connection lost.</div>';
+        _es.close(); _es = null;
+        setAnalysing(false);
+      }
     };
   }
 

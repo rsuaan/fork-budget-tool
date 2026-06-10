@@ -10,18 +10,17 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-function send(res, obj) {
+function sse(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
-// Parse [PROGRESS:key:state:detail] and [RESULT:...] markers from a text chunk
+// Extract [PROGRESS:key:state:detail] and [RESULT:...] markers from text
 function parseMarkers(text) {
   const events = [];
   for (const line of text.split('\n')) {
-    const progress = line.match(/\[PROGRESS:(\w+):(querying|done|error):?(.*?)\]$/);
+    const progress = line.match(/\[PROGRESS:(\w+):(querying|done|none|error):?(.*?)\]$/);
     if (progress) {
       events.push({ type: 'progress', key: progress[1], state: progress[2], detail: progress[3] || '' });
-      continue;
     }
     const result = line.match(/\[RESULT:([^\]]+)\]/);
     if (result) {
@@ -29,12 +28,6 @@ function parseMarkers(text) {
     }
   }
   return events;
-}
-
-// Detect OAuth URL in Claude output
-function extractOAuthUrl(text) {
-  const m = text.match(/https:\/\/claude-mcp-grafana[^\s)>"]+/);
-  return m ? m[0] : null;
 }
 
 const server = http.createServer((req, res) => {
@@ -72,49 +65,81 @@ const server = http.createServer((req, res) => {
     'Connection': 'keep-alive',
   });
 
+  // Send a heartbeat immediately so the browser knows the connection is live
+  sse(res, { type: 'connected' });
+
   const child = spawn(CLAUDE_BIN, [
+    '--print',
+    '--output-format', 'stream-json',
+    '--verbose',
     '--dangerously-skip-permissions',
     '-p', `/fork-budget ${sid}`,
   ], {
     env: { ...process.env, HOME: '/Users/rsuaan' },
+    cwd: '/Users/rsuaan',
   });
 
+  let lineBuf = '';
   let oauthOpened = false;
-  let buffer = '';
+  let fullText = '';
 
-  function processChunk(chunk) {
-    buffer += chunk;
+  function handleLine(line) {
+    if (!line.trim()) return;
+    let msg;
+    try { msg = JSON.parse(line); } catch { return; }
 
-    // Check for OAuth URL and open browser automatically
-    if (!oauthOpened) {
-      const oauthUrl = extractOAuthUrl(buffer);
-      if (oauthUrl) {
-        oauthOpened = true;
-        send(res, { type: 'auth', message: 'Grafana authentication required — opening browser…' });
-        exec(`open "${oauthUrl}"`, err => {
-          if (err) {
-            send(res, { type: 'auth_error', message: 'Could not open browser. Visit: ' + oauthUrl });
+    // Extract text from streaming assistant chunks
+    if (msg.type === 'assistant' && msg.message?.content) {
+      for (const block of msg.message.content) {
+        if (block.type === 'text' && block.text) {
+          fullText += block.text;
+
+          // Detect OAuth URL and auto-open browser
+          if (!oauthOpened) {
+            const oauthMatch = fullText.match(/https:\/\/claude-mcp-grafana[^\s)>"'\n]+/);
+            if (oauthMatch) {
+              oauthOpened = true;
+              sse(res, { type: 'auth', message: 'Grafana authentication required — opening browser…' });
+              exec(`open "${oauthMatch[0]}"`, () => {});
+            }
           }
-        });
-        send(res, { type: 'auth_waiting', message: 'Waiting for authentication…' });
+
+          // Parse and emit progress markers
+          for (const ev of parseMarkers(block.text)) {
+            sse(res, ev);
+          }
+        }
       }
     }
 
-    // Parse and emit structured progress markers
-    const markers = parseMarkers(buffer);
-    for (const ev of markers) {
-      send(res, ev);
+    // Final result — parse markers from full text in case any were missed
+    if (msg.type === 'result' && msg.subtype === 'success') {
+      for (const ev of parseMarkers(msg.result || '')) {
+        sse(res, ev);
+      }
+      sse(res, { type: 'done' });
     }
-    // Clear processed lines from buffer, keep last incomplete line
-    const lastNewline = buffer.lastIndexOf('\n');
-    if (lastNewline !== -1) buffer = buffer.slice(lastNewline + 1);
+
+    if (msg.type === 'result' && msg.subtype === 'error') {
+      sse(res, { type: 'error', message: msg.result || 'Claude returned an error' });
+      sse(res, { type: 'done' });
+    }
   }
 
-  child.stdout.on('data', chunk => processChunk(chunk.toString()));
-  child.stderr.on('data', chunk => processChunk(chunk.toString()));
+  child.stdout.on('data', chunk => {
+    lineBuf += chunk.toString();
+    const lines = lineBuf.split('\n');
+    lineBuf = lines.pop(); // keep incomplete last line
+    for (const line of lines) handleLine(line);
+  });
 
-  child.on('close', code => {
-    send(res, { type: 'done', code });
+  child.stderr.on('data', chunk => {
+    console.error('[bridge stderr]', chunk.toString());
+  });
+
+  child.on('close', () => {
+    if (lineBuf.trim()) handleLine(lineBuf);
+    sse(res, { type: 'done' });
     res.end();
   });
 
